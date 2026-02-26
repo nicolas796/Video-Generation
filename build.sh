@@ -19,9 +19,10 @@ mkdir -p uploads/clips
 mkdir -p uploads/final
 
 # Run database migrations
-# Set a dummy SECRET_KEY for build-time migrations if not provided
+# Set RENDER_BUILD flag so config.py knows it's build time and won't raise SECRET_KEY error
 echo "Running database migrations..."
-SECRET_KEY=${SECRET_KEY:-build-temp-key} flask db upgrade
+export RENDER_BUILD=true
+flask db upgrade
 
 echo "=========================================="
 echo "Build completed successfully!"

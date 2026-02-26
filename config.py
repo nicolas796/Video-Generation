@@ -13,6 +13,11 @@ def get_secret_key():
     if secret_key:
         return secret_key
     
+    # Check if we're in a build phase (Render build or similar)
+    # During build, we don't need a real SECRET_KEY for migrations
+    if os.getenv('RENDER_BUILD') == 'true' or os.getenv('BUILD_PHASE') == 'true':
+        return 'build-temp-key-not-for-production'
+    
     # In production, SECRET_KEY must be set
     if os.getenv('FLASK_ENV') == 'production':
         raise RuntimeError(
