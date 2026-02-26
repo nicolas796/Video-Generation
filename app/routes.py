@@ -27,6 +27,16 @@ import cv2
 main_bp = Blueprint('main', __name__)
 
 
+@main_bp.route('/health')
+def health_check():
+    """Health check endpoint for Render.com and monitoring."""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'product-video-generator',
+        'timestamp': datetime.utcnow().isoformat()
+    }), 200
+
+
 def is_safe_path(basedir, path):
     """Check if a path is safe (prevents path traversal attacks).
     

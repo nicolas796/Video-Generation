@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 from dotenv import load_dotenv
 
@@ -22,6 +23,26 @@ def get_secret_key():
     # For development only: generate a random key (sessions won't persist across restarts)
     return secrets.token_hex(32)
 
+def get_database_url():
+    """
+    Get database URL from environment.
+    
+    Render provides DATABASE_URL with 'postgres://' prefix,
+    but SQLAlchemy requires 'postgresql://'. This function handles the conversion.
+    """
+    database_url = os.getenv('DATABASE_URL')
+    
+    if not database_url:
+        # Default to SQLite for local development
+        return 'sqlite:///app.db'
+    
+    # Fix for Render's postgres:// vs postgresql://
+    # Render uses postgres:// but SQLAlchemy requires postgresql://
+    if database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    
+    return database_url
+
 class Config:
     """Base configuration class."""
     
@@ -31,8 +52,12 @@ class Config:
     SECRET_KEY = get_secret_key()
     
     # Database
-    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'sqlite:///app.db')
+    SQLALCHEMY_DATABASE_URI = get_database_url()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        'pool_recycle': 299,  # Recycle connections before Render's 5-min timeout
+        'pool_pre_ping': True,  # Verify connections before use
+    }
     
     # Upload paths
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -70,6 +95,12 @@ class ProductionConfig(Config):
     """Production configuration."""
     FLASK_ENV = 'production'
     FLASK_DEBUG = False
+    
+    # Additional production settings
+    SESSION_COOKIE_SECURE = True  # Only send cookies over HTTPS
+    SESSION_COOKIE_HTTPONLY = True  # Prevent XSS access to cookies
+    SESSION_COOKIE_SAMESITE = 'Lax'  # CSRF protection
+    PERMANENT_SESSION_LIFETIME = 3600  # 1 hour session timeout
 
 class TestingConfig(Config):
     """Testing configuration."""

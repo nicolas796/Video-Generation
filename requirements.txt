@@ -13,8 +13,8 @@ python-dotenv==1.0.0
 requests==2.31.0
 openai==1.30.0
 
-# Image Processing (install with: pip install --only-binary :all: pillow)
-# Pillow - install manually if needed
+# Image Processing
+Pillow==10.2.0
 
 # Video Processing
 ffmpeg-python==0.2.0
@@ -22,6 +22,13 @@ opencv-python==4.9.0.80
 
 # Database
 SQLAlchemy==2.0.23
+psycopg2-binary==2.9.9  # PostgreSQL adapter for production
+
+# Production WSGI Server
+gunicorn==21.2.0
+
+# Static Files
+whitenoise==6.6.0  # For serving static files in production
 
 # Additional utilities
 Werkzeug==3.0.1

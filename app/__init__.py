@@ -29,6 +29,15 @@ def create_app(config_name='default'):
     migrate.init_app(app, db)
     csrf.init_app(app)
     
+    # Initialize WhiteNoise for static files in production
+    if app.config['FLASK_ENV'] == 'production':
+        from whitenoise import WhiteNoise
+        app.wsgi_app = WhiteNoise(app.wsgi_app, root=static_dir, prefix='static/')
+        # Also serve uploaded files
+        upload_folder = app.config['UPLOAD_FOLDER']
+        if os.path.exists(upload_folder):
+            app.wsgi_app.add_files(upload_folder, prefix='uploads/')
+    
     # Initialize authentication
     from app.auth import init_login_manager, create_default_admin
     init_login_manager(app)
