@@ -1,4 +1,4 @@
-"""Clip analysis service using OpenAI multimodal models."""
+"""Clip analysis service using Kimi (Moonshot) multimodal models."""
 import base64
 import json
 import os
@@ -36,12 +36,12 @@ class ClipAnalyzer:
 
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.api_key = api_key or os.getenv("MOONSHOT_API_KEY")
         if not self.api_key:
-            raise ValueError("OpenAI API key is required for clip analysis")
+            raise ValueError("MOONSHOT_API_KEY is required for clip analysis")
 
-        self.model = model or os.getenv("CLIP_ANALYSIS_MODEL", "gpt-4o-mini")
-        self.base_url = "https://api.openai.com/v1"
+        self.model = model or os.getenv("CLIP_ANALYSIS_MODEL", "moonshot-v1-8k")
+        self.base_url = "https://api.moonshot.cn/v1"
 
     # ---------------------------------------------------------------------
     # Public API

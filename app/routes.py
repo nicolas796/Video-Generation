@@ -926,10 +926,10 @@ def generate_script_route(use_case_id):
     # Check for existing script
     existing_script = Script.query.filter_by(use_case_id=use_case_id).first()
     
-    # Get OpenAI API key
-    api_key = current_app.config.get('OPENAI_API_KEY')
+    # Get Kimi (Moonshot) API key
+    api_key = current_app.config.get('MOONSHOT_API_KEY')
     if not api_key:
-        return jsonify({'error': 'OpenAI API key not configured'}), 500
+        return jsonify({'error': 'MOONSHOT_API_KEY not configured'}), 500
     
     try:
         # Prepare product data
@@ -1030,9 +1030,9 @@ def regenerate_script(use_case_id):
     product = Product.query.get_or_404(use_case.product_id)
     existing = Script.query.filter_by(use_case_id=use_case_id).first()
     
-    api_key = current_app.config.get('OPENAI_API_KEY')
+    api_key = current_app.config.get('MOONSHOT_API_KEY')
     if not api_key:
-        return jsonify({'error': 'OpenAI API key not configured'}), 500
+        return jsonify({'error': 'MOONSHOT_API_KEY not configured'}), 500
     
     data = request.get_json() or {}
     refinement = data.get('refinement', '')
@@ -1612,7 +1612,7 @@ def analyze_clips(use_case_id):
     force = data.get('force', False)
     
     try:
-        api_key = current_app.config.get('OPENAI_API_KEY')
+        api_key = current_app.config.get('MOONSHOT_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         analyzer = ClipAnalyzer(api_key=api_key)
         

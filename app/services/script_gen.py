@@ -1,4 +1,4 @@
-"""Script generation service using OpenAI GPT models with offline fallback."""
+"""Script generation service using Kimi (Moonshot) API with offline fallback."""
 from __future__ import annotations
 
 import os
@@ -14,19 +14,23 @@ class ScriptGenerator:
     """Create, refine, and estimate short-form video scripts."""
 
     def __init__(self, api_key: Optional[str] = None, *, offline_fallback: bool = True) -> None:
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.api_key = api_key or os.getenv("MOONSHOT_API_KEY")
         self.offline_fallback = offline_fallback
         self.client: Optional[OpenAI] = None
         if self.api_key:
-            self.client = OpenAI(api_key=self.api_key)
+            # Use Kimi (Moonshot) API with OpenAI-compatible SDK
+            self.client = OpenAI(
+                api_key=self.api_key,
+                base_url="https://api.moonshot.cn/v1"
+            )
         elif not offline_fallback:
-            raise ValueError("OpenAI API key is required when offline fallback is disabled")
+            raise ValueError("MOONSHOT_API_KEY is required when offline fallback is disabled")
 
     # ------------------------------------------------------------------
-    @api_retry(label="openai_chat", exceptions=(Exception,))
+    @api_retry(label="kimi_chat", exceptions=(Exception,))
     def _chat_completion(self, messages, **kwargs):
         if not self.client:
-            raise RuntimeError("OpenAI client is not configured")
+            raise RuntimeError("Kimi client is not configured")
         return self.client.chat.completions.create(messages=messages, **kwargs)
 
     # ------------------------------------------------------------------
@@ -50,7 +54,7 @@ class ScriptGenerator:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="gpt-4o-mini",
+                model="moonshot-v1-8k",
                 temperature=0.8,
                 max_tokens=500,
             )
@@ -71,7 +75,7 @@ class ScriptGenerator:
             if not self.offline_fallback:
                 return {"success": False, "error": str(exc), "content": None, "estimated_duration": None}
             fallback = self._offline_script(product_data, use_case_config)
-            fallback["warning"] = f"OpenAI failed: {exc}"
+            fallback["warning"] = f"Kimi API failed: {exc}"
             return fallback
 
     def refine_script(
@@ -106,7 +110,7 @@ Provide ONLY the refined script text. No explanations."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="gpt-4o-mini",
+                model="moonshot-v1-8k",
                 temperature=0.8,
                 max_tokens=500,
             )
@@ -125,7 +129,7 @@ Provide ONLY the refined script text. No explanations."""
 
     # ------------------------------------------------------------------
     def _offline_script(self, product_data: Dict[str, Any], use_case_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Deterministic script used when OpenAI is unavailable."""
+        """Deterministic script used when Kimi API is unavailable."""
 
         name = product_data.get("name") or "this product"
         benefit = (product_data.get("specifications") or {}).get("Key benefit")

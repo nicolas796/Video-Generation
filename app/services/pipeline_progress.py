@@ -195,7 +195,7 @@ class PipelineRecoveryService:
         self.upload_folder = cfg.get("UPLOAD_FOLDER", "./uploads")
         self.api_keys = {
             "pollo": cfg.get("POLLO_API_KEY"),
-            "openai": cfg.get("OPENAI_API_KEY"),
+            "moonshot": cfg.get("MOONSHOT_API_KEY"),
             "elevenlabs": cfg.get("ELEVENLABS_API_KEY"),
         }
         self.ffmpeg_path = cfg.get("FFMPEG_PATH", "ffmpeg")
