@@ -1,0 +1,324 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Product Video Generator{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h1 class="h3 mb-3">
+            <i class="bi bi-kanban me-2"></i>
+            Video Generation Pipeline
+        </h1>
+        <p class="text-muted">Create stunning product videos in 8 simple steps. Track your progress below.</p>
+    </div>
+</div>
+
+<!-- Pipeline Visualization -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="pipeline-container">
+            <div class="pipeline-stages" id="pipelineStages">
+                <div class="pipeline-connector">
+                    <div class="pipeline-connector-progress" id="pipelineProgress"></div>
+                </div>
+                
+                <!-- Stage 1: Input -->
+                <div class="pipeline-stage active" data-stage="1" onclick="setStage(1)">
+                    <div class="stage-icon">
+                        <i class="bi bi-link-45deg"></i>
+                    </div>
+                    <span class="stage-number">1</span>
+                    <span class="stage-label">Input</span>
+                </div>
+                
+                <!-- Stage 2: Scraping -->
+                <div class="pipeline-stage" data-stage="2" onclick="setStage(2)">
+                    <div class="stage-icon">
+                        <i class="bi bi-download"></i>
+                    </div>
+                    <span class="stage-number">2</span>
+                    <span class="stage-label">Scraping</span>
+                </div>
+                
+                <!-- Stage 3: Spec Sheet -->
+                <div class="pipeline-stage" data-stage="3" onclick="setStage(3)">
+                    <div class="stage-icon">
+                        <i class="bi bi-file-earmark-text"></i>
+                    </div>
+                    <span class="stage-number">3</span>
+                    <span class="stage-label">Spec Sheet</span>
+                </div>
+                
+                <!-- Stage 4: Use Case -->
+                <div class="pipeline-stage" data-stage="4" onclick="setStage(4)">
+                    <div class="stage-icon">
+                        <i class="bi bi-sliders"></i>
+                    </div>
+                    <span class="stage-number">4</span>
+                    <span class="stage-label">Use Case</span>
+                </div>
+                
+                <!-- Stage 5: Script -->
+                <div class="pipeline-stage" data-stage="5" onclick="setStage(5)">
+                    <div class="stage-icon">
+                        <i class="bi bi-chat-square-text"></i>
+                    </div>
+                    <span class="stage-number">5</span>
+                    <span class="stage-label">Script</span>
+                </div>
+                
+                <!-- Stage 6: Video Gen -->
+                <div class="pipeline-stage" data-stage="6" onclick="setStage(6)">
+                    <div class="stage-icon">
+                        <i class="bi bi-camera-video"></i>
+                    </div>
+                    <span class="stage-number">6</span>
+                    <span class="stage-label">Video Gen</span>
+                </div>
+                
+                <!-- Stage 7: Assembly -->
+                <div class="pipeline-stage" data-stage="7" onclick="setStage(7)">
+                    <div class="stage-icon">
+                        <i class="bi bi-collection-play"></i>
+                    </div>
+                    <span class="stage-number">7</span>
+                    <span class="stage-label">Assembly</span>
+                </div>
+                
+                <!-- Stage 8: Output -->
+                <div class="pipeline-stage" data-stage="8" onclick="setStage(8)">
+                    <div class="stage-icon">
+                        <i class="bi bi-play-circle"></i>
+                    </div>
+                    <span class="stage-number">8</span>
+                    <span class="stage-label">Output</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Stage Content Area -->
+<div class="row">
+    <div class="col-12">
+        <div class="content-card" id="stageContent">
+            <!-- Stage 1: Input -->
+            <div class="stage-panel" data-panel="1">
+                <h4 class="mb-3">
+                    <i class="bi bi-link-45deg me-2 text-primary"></i>
+                    Step 1: Product Input
+                </h4>
+                <p class="text-muted mb-4">Enter a product URL to begin. We support Shopify stores and other e-commerce platforms.</p>
+                
+                <div class="row justify-content-center">
+                    <div class="col-md-8 col-lg-6">
+                        <div class="input-group input-group-lg mb-3">
+                            <span class="input-group-text bg-white">
+                                <i class="bi bi-globe text-muted"></i>
+                            </span>
+                            <input type="url" class="form-control" id="productUrl" 
+                                   placeholder="https://your-store.com/products/product-name">
+                            <button class="btn btn-primary" type="button" onclick="startScraping()">
+                                <i class="bi bi-arrow-right me-1"></i>
+                                Start
+                            </button>
+                        </div>
+                        <div class="form-text text-center">
+                            <i class="bi bi-info-circle me-1"></i>
+                            Paste a product URL from any e-commerce site
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Stage 2: Scraping (hidden by default) -->
+            <div class="stage-panel d-none" data-panel="2">
+                <h4 class="mb-3">
+                    <i class="bi bi-download me-2 text-primary"></i>
+                    Step 2: Scraping Product Data
+                </h4>
+                <p class="text-muted mb-4">We're extracting product information, images, and reviews from the provided URL.</p>
+                
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted">Scraping in progress...</p>
+                </div>
+            </div>
+            
+            <!-- Stage 3: Spec Sheet -->
+            <div class="stage-panel d-none" data-panel="3">
+                <h4 class="mb-3">
+                    <i class="bi bi-file-earmark-text me-2 text-primary"></i>
+                    Step 3: Product Spec Sheet
+                </h4>
+                <p class="text-muted mb-4">Review and edit the extracted product information.</p>
+                
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    This panel will display the scraped product data for review and editing.
+                </div>
+            </div>
+            
+            <!-- Stage 4: Use Case -->
+            <div class="stage-panel d-none" data-panel="4">
+                <h4 class="mb-3">
+                    <i class="bi bi-sliders me-2 text-primary"></i>
+                    Step 4: Configure Use Case
+                </h4>
+                <p class="text-muted mb-4">Define the video format, style, and target audience.</p>
+                
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Configuration form will appear here.
+                </div>
+            </div>
+            
+            <!-- Stage 5: Script -->
+            <div class="stage-panel d-none" data-panel="5">
+                <h4 class="mb-3">
+                    <i class="bi bi-chat-square-text me-2 text-primary"></i>
+                    Step 5: Generate Script
+                </h4>
+                <p class="text-muted mb-4">Create a voiceover script optimized for your video.</p>
+                
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Script generation interface will appear here.
+                </div>
+            </div>
+            
+            <!-- Stage 6: Video Gen -->
+            <div class="stage-panel d-none" data-panel="6">
+                <h4 class="mb-3">
+                    <i class="bi bi-camera-video me-2 text-primary"></i>
+                    Step 6: Generate Video Clips
+                </h4>
+                <p class="text-muted mb-4">Generate video clips using Pollo.ai based on your configuration.</p>
+                
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Video generation status and preview will appear here.
+                </div>
+            </div>
+            
+            <!-- Stage 7: Assembly -->
+            <div class="stage-panel d-none" data-panel="7">
+                <h4 class="mb-3">
+                    <i class="bi bi-collection-play me-2 text-primary"></i>
+                    Step 7: Assemble Video
+                </h4>
+                <p class="text-muted mb-4">Order clips, add voiceover, and render the final video.</p>
+                
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Clip ordering and assembly interface will appear here.
+                </div>
+            </div>
+            
+            <!-- Stage 8: Output -->
+            <div class="stage-panel d-none" data-panel="8">
+                <h4 class="mb-3">
+                    <i class="bi bi-play-circle me-2 text-success"></i>
+                    Step 8: Final Output
+                </h4>
+                <p class="text-muted mb-4">Your video is ready! Download or create variations.</p>
+                
+                <div class="alert alert-success">
+                    <i class="bi bi-check-circle me-2"></i>
+                    Final video preview and download options will appear here.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Stats Row -->
+<div class="row mt-4">
+    <div class="col-md-3 mb-3">
+        <div class="content-card text-center">
+            <i class="bi bi-box display-5 text-primary"></i>
+            <h5 class="mt-2 mb-1">0</h5>
+            <small class="text-muted">Products</small>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="content-card text-center">
+            <i class="bi bi-collection display-5 text-info"></i>
+            <h5 class="mt-2 mb-1">0</h5>
+            <small class="text-muted">Use Cases</small>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="content-card text-center">
+            <i class="bi bi-film display-5 text-warning"></i>
+            <h5 class="mt-2 mb-1">0</h5>
+            <small class="text-muted">Video Clips</small>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="content-card text-center">
+            <i class="bi bi-play-btn display-5 text-success"></i>
+            <h5 class="mt-2 mb-1">0</h5>
+            <small class="text-muted">Final Videos</small>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let currentStage = 1;
+    const totalStages = 8;
+    
+    function setStage(stageNum) {
+        // Update current stage
+        currentStage = stageNum;
+        
+        // Update stage visuals
+        document.querySelectorAll('.pipeline-stage').forEach((stage, index) => {
+            const stageNumber = index + 1;
+            stage.classList.remove('active', 'complete');
+            
+            if (stageNumber === currentStage) {
+                stage.classList.add('active');
+            } else if (stageNumber < currentStage) {
+                stage.classList.add('complete');
+            }
+        });
+        
+        // Update progress bar
+        const progress = ((currentStage - 1) / (totalStages - 1)) * 100;
+        document.getElementById('pipelineProgress').style.width = progress + '%';
+        
+        // Show corresponding panel
+        document.querySelectorAll('.stage-panel').forEach((panel, index) => {
+            if (index + 1 === stageNum) {
+                panel.classList.remove('d-none');
+            } else {
+                panel.classList.add('d-none');
+            }
+        });
+    }
+    
+    function startScraping() {
+        const url = document.getElementById('productUrl').value.trim();
+        if (!url) {
+            alert('Please enter a product URL');
+            return;
+        }
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            alert('Please enter a valid URL starting with http:// or https://');
+            return;
+        }
+        const encodedUrl = encodeURIComponent(url);
+        window.location.href = `/scrape?url=${encodedUrl}`;
+    }
+    
+    // Initialize
+    document.addEventListener('DOMContentLoaded', function() {
+        setStage(1);
+    });
+</script>
+{% endblock %}

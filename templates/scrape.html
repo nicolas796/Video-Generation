@@ -1,0 +1,700 @@
+{% extends "base.html" %}
+
+{% block title %}Scrape Product - Product Video Generator{% endblock %}
+
+{% block extra_css %}
+<style>
+    .scraping-progress {
+        display: none;
+    }
+    
+    .scraping-progress.active {
+        display: block;
+    }
+    
+    .progress-step {
+        display: flex;
+        align-items: center;
+        margin-bottom: 1rem;
+        opacity: 0.5;
+        transition: all 0.3s ease;
+    }
+    
+    .progress-step.active {
+        opacity: 1;
+    }
+    
+    .progress-step.complete {
+        opacity: 1;
+    }
+    
+    .progress-step.complete .step-icon {
+        background: var(--pipeline-complete);
+        border-color: var(--pipeline-complete);
+        color: white;
+    }
+    
+    .progress-step.error .step-icon {
+        background: var(--pipeline-error);
+        border-color: var(--pipeline-error);
+        color: white;
+    }
+    
+    .step-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: 2px solid #dee2e6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 1rem;
+        background: white;
+        transition: all 0.3s ease;
+    }
+    
+    .step-text {
+        font-size: 0.95rem;
+        color: #6c757d;
+    }
+    
+    .progress-step.active .step-text {
+        color: #212529;
+        font-weight: 500;
+    }
+    
+    .progress-step.complete .step-text {
+        color: var(--pipeline-complete);
+    }
+    
+    .progress-step.error .step-text {
+        color: var(--pipeline-error);
+    }
+    
+    .preview-card {
+        background: #f8f9fa;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-top: 1.5rem;
+    }
+    
+    .preview-image {
+        width: 100%;
+        height: 200px;
+        object-fit: cover;
+        border-radius: 8px;
+        margin-bottom: 1rem;
+    }
+    
+    .image-gallery {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 0.5rem;
+        margin-top: 1rem;
+    }
+    
+    .gallery-thumb {
+        width: 100%;
+        height: 100px;
+        object-fit: cover;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: transform 0.2s;
+    }
+    
+    .gallery-thumb:hover {
+        transform: scale(1.05);
+    }
+    
+    .spec-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.375rem 0.75rem;
+        background: #e9ecef;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        margin: 0.25rem;
+    }
+    
+    .spec-badge .label {
+        color: #6c757d;
+        margin-right: 0.5rem;
+    }
+    
+    .spec-badge .value {
+        font-weight: 500;
+        color: #212529;
+    }
+    
+    .review-card {
+        background: white;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        border: 1px solid #e9ecef;
+    }
+    
+    .review-rating {
+        color: #ffc107;
+    }
+    
+    .platform-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.25rem 0.75rem;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        text-transform: uppercase;
+    }
+    
+    .platform-badge.shopify {
+        background: linear-gradient(135deg, #96bf48 0%, #7ba135 100%);
+    }
+    
+    .platform-badge.woocommerce {
+        background: linear-gradient(135deg, #96588a 0%, #7a4680 100%);
+    }
+    
+    .platform-badge.bigcommerce {
+        gradient: linear-gradient(135deg, #34313f 0%, #1a1821 100%);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('main.index') }}">Dashboard</a></li>
+                <li class="breadcrumb-item active">Scrape Product</li>
+            </ol>
+        </nav>
+        <h1 class="h3 mb-3">
+            <i class="bi bi-download me-2 text-primary"></i>
+            Scrape Product
+        </h1>
+        <p class="text-muted">Enter a product URL to extract all product data, images, and metadata.</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- URL Input Card -->
+        <div class="content-card mb-4">
+            <h5 class="mb-3">
+                <i class="bi bi-link-45deg me-2"></i>
+                Product URL
+            </h5>
+            <div class="input-group input-group-lg">
+                <span class="input-group-text bg-white">
+                    <i class="bi bi-globe text-muted"></i>
+                </span>
+                <input type="url" class="form-control" id="productUrl" 
+                       placeholder="https://your-store.com/products/product-name">
+                <button class="btn btn-primary" type="button" id="scrapeBtn">
+                    <i class="bi bi-download me-1"></i>
+                    Scrape
+                </button>
+            </div>
+            <div class="form-text mt-2">
+                <i class="bi bi-info-circle me-1"></i>
+                Supports Shopify, WooCommerce, BigCommerce, and other e-commerce platforms
+            </div>
+        </div>
+        
+        <!-- Progress Indicator -->
+        <div class="content-card scraping-progress mb-4" id="scrapingProgress">
+            <h5 class="mb-3">
+                <i class="bi bi-arrow-repeat me-2"></i>
+                Scraping in Progress
+            </h5>
+            
+            <div class="progress mb-4" style="height: 8px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                     id="progressBar" role="progressbar" style="width: 0%"></div>
+            </div>
+            
+            <div class="progress-steps">
+                <div class="progress-step" id="step1">
+                    <div class="step-icon">
+                        <i class="bi bi-globe"></i>
+                    </div>
+                    <span class="step-text">Fetching page...</span>
+                </div>
+                <div class="progress-step" id="step2">
+                    <div class="step-icon">
+                        <i class="bi bi-code-square"></i>
+                    </div>
+                    <span class="step-text">Parsing structured data...</span>
+                </div>
+                <div class="progress-step" id="step3">
+                    <div class="step-icon">
+                        <i class="bi bi-images"></i>
+                    </div>
+                    <span class="step-text">Extracting images...</span>
+                </div>
+                <div class="progress-step" id="step4">
+                    <div class="step-icon">
+                        <i class="bi bi-check-circle"></i>
+                    </div>
+                    <span class="step-text">Finalizing...</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Results Preview -->
+        <div class="content-card d-none" id="resultsPreview">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <h5 class="mb-0">
+                    <i class="bi bi-check-circle-fill text-success me-2"></i>
+                    Scraping Complete
+                </h5>
+                <span class="platform-badge" id="platformBadge">Generic</span>
+            </div>
+            
+            <div class="alert alert-success mb-3">
+                <i class="bi bi-check-circle me-2"></i>
+                Successfully scraped product data!
+            </div>
+            
+            <div class="preview-card">
+                <div class="row">
+                    <div class="col-md-4">
+                        <img src="" alt="Product" class="preview-image" id="previewMainImage">
+                        <div class="image-gallery" id="previewGallery"></div>
+                    </div>
+                    <div class="col-md-8">
+                        <h4 id="previewName">Product Name</h4>
+                        <p class="text-muted mb-2" id="previewBrand">Brand</p>
+                        <h5 class="text-primary mb-3" id="previewPrice">$0.00</h5>
+                        
+                        <div class="mb-3">
+                            <h6>Description</h6>
+                            <p class="text-muted" id="previewDescription">Product description will appear here...</p>
+                        </div>
+                        
+                        <div class="mb-3" id="previewSpecs">
+                            <h6>Specifications</h6>
+                            <div id="specsContainer"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="d-flex gap-2 mt-3">
+                <button class="btn btn-primary" id="saveBtn" onclick="saveProduct()">
+                    <i class="bi bi-save me-1"></i>
+                    Save to Database
+                </button>
+                <button class="btn btn-outline-primary" onclick="viewSpecSheet()">
+                    <i class="bi bi-file-earmark-text me-1"></i>
+                    View Spec Sheet
+                </button>
+                <button class="btn btn-outline-secondary" onclick="resetScraper()">
+                    <i class="bi bi-arrow-counterclockwise me-1"></i>
+                    Scrape Another
+                </button>
+            </div>
+        </div>
+        
+        <!-- Error Display -->
+        <div class="content-card d-none" id="errorDisplay">
+            <div class="alert alert-danger mb-0">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                <strong>Scraping Failed</strong>
+                <p class="mb-0 mt-2" id="errorMessage">Error message here</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <!-- Recent Products -->
+        <div class="content-card">
+            <h5 class="mb-3">
+                <i class="bi bi-clock-history me-2"></i>
+                Recently Scraped
+            </h5>
+            <div id="recentProducts">
+                <p class="text-muted text-center py-3">No products yet</p>
+            </div>
+        </div>
+        
+        <!-- Tips Card -->
+        <div class="content-card mt-4">
+            <h5 class="mb-3">
+                <i class="bi bi-lightbulb me-2"></i>
+                Tips
+            </h5>
+            <ul class="list-unstyled mb-0">
+                <li class="mb-2">
+                    <i class="bi bi-check2 text-success me-2"></i>
+                    Use full product page URLs
+                </li>
+                <li class="mb-2">
+                    <i class="bi bi-check2 text-success me-2"></i>
+                    Shopify stores work best
+                </li>
+                <li class="mb-2">
+                    <i class="bi bi-check2 text-success me-2"></i>
+                    Make sure the product is publicly visible
+                </li>
+                <li>
+                    <i class="bi bi-x-lg text-danger me-2"></i>
+                    Amazon URLs are not supported
+                </li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let scrapedData = null;
+    let currentProductId = null;
+    let progressTimeouts = [];
+    let scrapeCompleted = false;
+    
+    // Load recent products on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('DOM loaded, JS running');
+        const scrapeBtn = document.getElementById('scrapeBtn');
+        if (scrapeBtn) {
+            scrapeBtn.addEventListener('click', function(event) {
+                console.log('Scrape button clicked');
+                event.preventDefault();
+                event.stopPropagation();
+                startScraping(event);
+            });
+        }
+        loadRecentProducts();
+
+        const params = new URLSearchParams(window.location.search);
+        const initialUrl = params.get('url');
+        if (initialUrl) {
+            const urlInput = document.getElementById('productUrl');
+            if (urlInput) {
+                urlInput.value = initialUrl;
+                // Automatically start scraping after populating the URL
+                startScraping();
+            }
+        }
+    });
+    
+    async function startScraping(event) {
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+        console.log('startScraping() called');
+        const url = document.getElementById('productUrl').value.trim();
+        
+        if (!url) {
+            alert('Please enter a product URL');
+            return;
+        }
+        
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+            alert('Please enter a valid URL starting with http:// or https://');
+            return;
+        }
+        
+        scrapeCompleted = false;
+        clearProgressTimeouts();
+
+        // Reset UI
+        resetUI();
+        
+        // Show progress
+        document.getElementById('scrapingProgress').classList.add('active');
+        document.getElementById('scrapeBtn').disabled = true;
+        document.getElementById('scrapeBtn').innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Scraping...';
+        
+        // Animate progress
+        animateProgress();
+        
+        try {
+            const response = await fetch('/api/scrape', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ url: url, save: false })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                scrapedData = result.data;
+                showResults(result.data);
+                updateProgressComplete();
+            } else {
+                showError(result.error || 'Unknown error occurred');
+            }
+        } catch (error) {
+            showError('Network error: ' + error.message);
+        } finally {
+            document.getElementById('scrapeBtn').disabled = false;
+            document.getElementById('scrapeBtn').innerHTML = '<i class="bi bi-download me-1"></i>Scrape';
+        }
+    }
+    
+    function animateProgress() {
+        const steps = [
+            { id: 'step1', delay: 0 },
+            { id: 'step2', delay: 800 },
+            { id: 'step3', delay: 1600 },
+            { id: 'step4', delay: 2400 }
+        ];
+        
+        steps.forEach((step, index) => {
+            const timeoutId = setTimeout(() => {
+                if (scrapeCompleted) {
+                    return;
+                }
+                const el = document.getElementById(step.id);
+                el.classList.add('active');
+                
+                // Update progress bar
+                const progress = ((index + 1) / steps.length) * 100;
+                document.getElementById('progressBar').style.width = progress + '%';
+                
+                // Mark previous steps as complete
+                if (index > 0) {
+                    for (let i = 0; i < index; i++) {
+                        document.getElementById(steps[i].id).classList.add('complete');
+                        document.getElementById(steps[i].id).classList.remove('active');
+                    }
+                }
+            }, step.delay);
+            progressTimeouts.push(timeoutId);
+        });
+    }
+    
+    function updateProgressComplete() {
+        scrapeCompleted = true;
+        clearProgressTimeouts();
+        document.getElementById('progressBar').style.width = '100%';
+        document.getElementById('progressBar').classList.remove('progress-bar-animated');
+        
+        // Mark all steps complete
+        for (let i = 1; i <= 4; i++) {
+            const el = document.getElementById('step' + i);
+            el.classList.add('complete');
+            el.classList.remove('active');
+        }
+    }
+    
+    function showResults(data) {
+        document.getElementById('scrapingProgress').classList.remove('active');
+        document.getElementById('resultsPreview').classList.remove('d-none');
+        
+        // Update platform badge
+        const platformBadge = document.getElementById('platformBadge');
+        platformBadge.textContent = data.platform || 'Generic';
+        platformBadge.className = 'platform-badge ' + (data.platform || 'generic');
+        
+        // Update preview content
+        document.getElementById('previewName').textContent = data.name || 'Unknown Product';
+        document.getElementById('previewBrand').textContent = data.brand || 'Unknown Brand';
+        document.getElementById('previewBrand').style.display = data.brand ? 'block' : 'none';
+        
+        // Price
+        let priceText = '';
+        if (data.price) {
+            priceText = data.currency ? `${data.currency} ${data.price}` : `$${data.price}`;
+            if (data.compare_at_price && data.compare_at_price !== data.price) {
+                priceText += ` (was ${data.compare_at_price})`;
+            }
+        } else {
+            priceText = 'Price not available';
+        }
+        document.getElementById('previewPrice').textContent = priceText;
+        
+        // Description
+        document.getElementById('previewDescription').textContent = 
+            data.description ? data.description.substring(0, 300) + (data.description.length > 300 ? '...' : '') : 
+            'No description available';
+        
+        // Main image
+        const mainImage = document.getElementById('previewMainImage');
+        if (data.images && data.images.length > 0) {
+            mainImage.src = data.images[0];
+            mainImage.style.display = 'block';
+        } else {
+            mainImage.style.display = 'none';
+        }
+        
+        // Image gallery
+        const gallery = document.getElementById('previewGallery');
+        gallery.innerHTML = '';
+        if (data.images && data.images.length > 1) {
+            data.images.slice(1, 7).forEach(img => {
+                const thumb = document.createElement('img');
+                thumb.src = img;
+                thumb.className = 'gallery-thumb';
+                thumb.onclick = () => { mainImage.src = img; };
+                gallery.appendChild(thumb);
+            });
+        }
+        
+        // Specifications
+        const specsContainer = document.getElementById('specsContainer');
+        specsContainer.innerHTML = '';
+        if (data.specifications && Object.keys(data.specifications).length > 0) {
+            Object.entries(data.specifications).slice(0, 6).forEach(([key, value]) => {
+                const badge = document.createElement('span');
+                badge.className = 'spec-badge';
+                badge.innerHTML = `<span class="label">${key}:</span><span class="value">${value}</span>`;
+                specsContainer.appendChild(badge);
+            });
+            document.getElementById('previewSpecs').style.display = 'block';
+        } else {
+            document.getElementById('previewSpecs').style.display = 'none';
+        }
+    }
+    
+    function showError(message) {
+        scrapeCompleted = true;
+        clearProgressTimeouts();
+        document.getElementById('scrapingProgress').classList.remove('active');
+        document.getElementById('errorDisplay').classList.remove('d-none');
+        document.getElementById('errorMessage').textContent = message;
+    }
+    
+    async function saveProduct() {
+        if (!scrapedData) return;
+        
+        const btn = document.getElementById('saveBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving...';
+        
+        try {
+            const response = await fetch('/api/scrape', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ 
+                    url: scrapedData.url, 
+                    save: true 
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success && result.data.product_id) {
+                currentProductId = result.data.product_id;
+                btn.innerHTML = '<i class="bi bi-check me-1"></i>Saved!';
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-success');
+                
+                // Refresh recent products
+                loadRecentProducts();
+                
+                // Redirect to spec sheet after a short delay
+                setTimeout(() => {
+                    window.location.href = `/spec-sheet/${currentProductId}`;
+                }, 1000);
+            } else {
+                throw new Error(result.error || 'Failed to save');
+            }
+        } catch (error) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-save me-1"></i>Save to Database';
+            alert('Error saving product: ' + error.message);
+        }
+    }
+    
+    function viewSpecSheet() {
+        if (currentProductId) {
+            window.location.href = `/spec-sheet/${currentProductId}`;
+        } else if (scrapedData) {
+            // Need to save first
+            saveProduct().then(() => {
+                if (currentProductId) {
+                    window.location.href = `/spec-sheet/${currentProductId}`;
+                }
+            });
+        }
+    }
+    
+    function resetScraper() {
+        scrapedData = null;
+        currentProductId = null;
+        document.getElementById('productUrl').value = '';
+        resetUI();
+    }
+    
+    function resetUI() {
+        clearProgressTimeouts();
+        scrapeCompleted = false;
+        document.getElementById('scrapingProgress').classList.remove('active');
+        document.getElementById('resultsPreview').classList.add('d-none');
+        document.getElementById('errorDisplay').classList.add('d-none');
+        document.getElementById('progressBar').style.width = '0%';
+        document.getElementById('progressBar').classList.add('progress-bar-animated');
+        
+        for (let i = 1; i <= 4; i++) {
+            const el = document.getElementById('step' + i);
+            el.classList.remove('active', 'complete');
+        }
+        
+        const btn = document.getElementById('saveBtn');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-save me-1"></i>Save to Database';
+        btn.classList.add('btn-primary');
+        btn.classList.remove('btn-success');
+    }
+    
+    function clearProgressTimeouts() {
+        progressTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+        progressTimeouts = [];
+    }
+    
+    async function loadRecentProducts() {
+        try {
+            const response = await fetch('/api/products');
+            const products = await response.json();
+            
+            const container = document.getElementById('recentProducts');
+            
+            if (products.length === 0) {
+                container.innerHTML = '<p class="text-muted text-center py-3">No products yet</p>';
+                return;
+            }
+            
+            container.innerHTML = products.slice(0, 5).map(p => `
+                <div class="d-flex align-items-center mb-3 p-2 rounded hover-bg-light" style="cursor: pointer;" onclick="window.location.href='/spec-sheet/${p.id}'">
+                    <div class="flex-shrink-0">
+                        ${p.images && p.images.length > 0 
+                            ? `<img src="${p.images[0]}" alt="" style="width: 50px; height: 50px; object-fit: cover; border-radius: 6px;">`
+                            : `<div style="width: 50px; height: 50px; background: #e9ecef; border-radius: 6px; display: flex; align-items: center; justify-content: center;"><i class="bi bi-image text-muted"></i></div>`
+                        }
+                    </div>
+                    <div class="flex-grow-1 ms-3">
+                        <h6 class="mb-0 text-truncate" style="max-width: 200px;">${p.name}</h6>
+                        <small class="text-muted">${p.brand || 'Unknown brand'}</small>
+                    </div>
+                    <div class="flex-shrink-0">
+                        <i class="bi bi-chevron-right text-muted"></i>
+                    </div>
+                </div>
+            `).join('');
+        } catch (error) {
+            console.error('Failed to load recent products:', error);
+        }
+    }
+    
+    // Allow Enter key to submit
+    document.getElementById('productUrl').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            startScraping();
+        }
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,706 @@
+{% extends "base.html" %}
+
+{% block title %}Script Generation - {{ product.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .script-editor {
+        font-family: 'Georgia', serif;
+        font-size: 1.1rem;
+        line-height: 1.8;
+        min-height: 200px;
+        resize: vertical;
+    }
+    
+    .script-display {
+        font-family: 'Georgia', serif;
+        font-size: 1.25rem;
+        line-height: 2;
+        color: #333;
+        background: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 8px;
+        border-left: 4px solid #0d6efd;
+        white-space: pre-wrap;
+    }
+    
+    .stat-card {
+        background: white;
+        border-radius: 8px;
+        padding: 1rem;
+        text-align: center;
+        border: 1px solid #e9ecef;
+    }
+    
+    .stat-value {
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: #0d6efd;
+    }
+    
+    .stat-label {
+        font-size: 0.85rem;
+        color: #6c757d;
+    }
+    
+    .tone-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        border-radius: 20px;
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+    
+    .tone-realistic { background: #d1ecf1; color: #0c5460; }
+    .tone-cinematic { background: #f8d7da; color: #721c24; }
+    .tone-animated { background: #fff3cd; color: #856404; }
+    .tone-comic { background: #d4edda; color: #155724; }
+    
+    .product-preview {
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid #e9ecef;
+    }
+    
+    .product-image {
+        width: 100%;
+        height: 200px;
+        object-fit: cover;
+        background: #f8f9fa;
+    }
+    
+    .pipeline-mini {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.85rem;
+    }
+    
+    .pipeline-mini .stage {
+        padding: 0.25rem 0.75rem;
+        border-radius: 20px;
+        background: #e9ecef;
+        color: #6c757d;
+    }
+    
+    .pipeline-mini .stage.active {
+        background: #0d6efd;
+        color: white;
+    }
+    
+    .pipeline-mini .stage.complete {
+        background: #198754;
+        color: white;
+    }
+    
+    .btn-generate {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border: none;
+        color: white;
+        padding: 0.75rem 2rem;
+        font-weight: 500;
+    }
+    
+    .btn-generate:hover {
+        background: linear-gradient(135deg, #5a6fd6 0%, #6a4190 100%);
+        color: white;
+    }
+    
+    .refinement-input {
+        border-radius: 20px;
+        padding: 0.75rem 1.25rem;
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 4rem 2rem;
+    }
+    
+    .empty-state-icon {
+        font-size: 4rem;
+        color: #dee2e6;
+        margin-bottom: 1rem;
+    }
+    
+    .word-count-warning {
+        color: #dc3545;
+        font-weight: 500;
+    }
+    
+    .word-count-ok {
+        color: #198754;
+        font-weight: 500;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Pipeline Progress -->
+<div class="pipeline-container">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0">Pipeline Progress</h5>
+        <span class="text-muted small">{{ product.name }}</span>
+    </div>
+    <div class="pipeline-mini">
+        <span class="stage complete"><i class="bi bi-check-circle me-1"></i>Input</span>
+        <i class="bi bi-chevron-right text-muted"></i>
+        <span class="stage complete"><i class="bi bi-check-circle me-1"></i>Scrape</span>
+        <i class="bi bi-chevron-right text-muted"></i>
+        <span class="stage complete"><i class="bi bi-check-circle me-1"></i>Spec Sheet</span>
+        <i class="bi bi-chevron-right text-muted"></i>
+        <span class="stage complete"><i class="bi bi-check-circle me-1"></i>Use Case</span>
+        <i class="bi bi-chevron-right text-muted"></i>
+        <span class="stage active"><i class="bi bi-pencil me-1"></i>Script</span>
+        <i class="bi bi-chevron-right text-muted"></i>
+        <span class="stage">Video</span>
+        <i class="bi bi-chevron-right text-muted"></i>
+        <span class="stage">Assembly</span>
+        <i class="bi bi-chevron-right text-muted"></i>
+        <span class="stage">Output</span>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Left Column - Product Info -->
+    <div class="col-lg-4">
+        <div class="product-preview mb-4">
+            {% if product.images and product.images|length > 0 %}
+            <img src="{{ product.images[0] }}" alt="{{ product.name }}" class="product-image" onerror="this.src='https://via.placeholder.com/400x200?text=No+Image'">
+            {% else %}
+            <div class="product-image d-flex align-items-center justify-content-center bg-light">
+                <i class="bi bi-image text-muted" style="font-size: 3rem;"></i>
+            </div>
+            {% endif %}
+            <div class="p-3">
+                <h6 class="mb-1">{{ product.name }}</h6>
+                {% if product.brand %}
+                <p class="text-muted small mb-1">{{ product.brand }}</p>
+                {% endif %}
+                {% if product.price %}
+                <p class="text-primary fw-bold mb-2">{{ product.price }}</p>
+                {% endif %}
+                <a href="/use-case/{{ product.id }}" class="btn btn-outline-primary btn-sm w-100">
+                    <i class="bi bi-arrow-left me-1"></i>Back to Use Cases
+                </a>
+            </div>
+        </div>
+        
+        <!-- Use Case Config Summary -->
+        <div class="content-card">
+            <h6 class="mb-3"><i class="bi bi-gear me-2"></i>Use Case Config</h6>
+            <div class="mb-3">
+                <label class="text-muted small">Name</label>
+                <p class="mb-1 fw-medium">{{ use_case.name }}</p>
+            </div>
+            <div class="mb-3">
+                <label class="text-muted small">Format</label>
+                <p class="mb-1 fw-medium">{{ use_case.format }}</p>
+            </div>
+            <div class="mb-3">
+                <label class="text-muted small">Style</label>
+                <div class="mt-1">
+                    <span class="tone-badge tone-{{ use_case.style }}">
+                        {% if use_case.style == 'realistic' %}
+                        <i class="bi bi-camera"></i>Realistic
+                        {% elif use_case.style == 'cinematic' %}
+                        <i class="bi bi-film"></i>Cinematic
+                        {% elif use_case.style == 'animated' %}
+                        <i class="bi bi-stars"></i>Animated
+                        {% elif use_case.style == 'comic' %}
+                        <i class="bi bi-emoji-smile"></i>Comic
+                        {% else %}
+                        {{ use_case.style|title }}
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+            <div class="mb-3">
+                <label class="text-muted small">Target Duration</label>
+                <p class="mb-1 fw-medium">{{ use_case.duration_target }} seconds</p>
+            </div>
+            {% if use_case.goal %}
+            <div class="mb-3">
+                <label class="text-muted small">Call to Action</label>
+                <p class="mb-1 fw-medium">{{ use_case.goal }}</p>
+            </div>
+            {% endif %}
+            {% if use_case.target_audience %}
+            <div class="mb-0">
+                <label class="text-muted small">Target Audience</label>
+                <p class="mb-1 fw-medium">{{ use_case.target_audience }}</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Right Column - Script Editor -->
+    <div class="col-lg-8">
+        <div class="content-card">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <div>
+                    <h4 class="mb-1"><i class="bi bi-file-text me-2"></i>Voiceover Script</h4>
+                    <p class="text-muted mb-0">Generate and edit your video voiceover script</p>
+                </div>
+                <span id="scriptStatus" class="badge bg-secondary">No Script</span>
+            </div>
+            
+            <!-- Empty State -->
+            <div id="emptyState" class="empty-state">
+                <div class="empty-state-icon">
+                    <i class="bi bi-magic"></i>
+                </div>
+                <h5>Ready to Create Your Script</h5>
+                <p class="text-muted mb-4">Generate a compelling voiceover script tailored to your product and use case configuration.</p>
+                <button id="generateBtn" class="btn btn-generate btn-lg" onclick="generateScript()">
+                    <i class="bi bi-magic me-2"></i>Generate Script
+                </button>
+                <div id="generateLoading" class="mt-3 d-none">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted mt-2 small">Crafting your perfect script...</p>
+                </div>
+            </div>
+            
+            <!-- Script Display/Editor -->
+            <div id="scriptContainer" class="d-none">
+                <!-- Stats Row -->
+                <div class="row g-2 mb-4">
+                    <div class="col-6 col-md-3">
+                        <div class="stat-card">
+                            <div class="stat-value" id="wordCount">0</div>
+                            <div class="stat-label">Words</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-card">
+                            <div class="stat-value" id="estimatedDuration">0s</div>
+                            <div class="stat-label">Est. Duration</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-card">
+                            <div class="stat-value" id="targetDuration">{{ use_case.duration_target }}s</div>
+                            <div class="stat-label">Target</div>
+                        </div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="stat-card">
+                            <div class="stat-value" id="durationDiff">0s</div>
+                            <div class="stat-label">Difference</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Duration Warning -->
+                <div id="durationWarning" class="alert alert-warning d-none mb-4">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    <strong>Duration Mismatch:</strong> Your script is <span id="durationDiffText"></span> from the target. Consider adjusting the content.
+                </div>
+                
+                <!-- Script Display -->
+                <div id="scriptDisplaySection">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <label class="fw-medium">Generated Script</label>
+                        <button class="btn btn-outline-primary btn-sm" onclick="enableEdit()">
+                            <i class="bi bi-pencil me-1"></i>Edit
+                        </button>
+                    </div>
+                    <div id="scriptDisplay" class="script-display mb-4"></div>
+                </div>
+                
+                <!-- Script Editor -->
+                <div id="scriptEditorSection" class="d-none">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <label class="fw-medium">Edit Script</label>
+                        <div>
+                            <button class="btn btn-outline-secondary btn-sm me-2" onclick="cancelEdit()">
+                                Cancel
+                            </button>
+                            <button class="btn btn-primary btn-sm" onclick="saveScript()">
+                                <i class="bi bi-check me-1"></i>Save
+                            </button>
+                        </div>
+                    </div>
+                    <textarea id="scriptEditor" class="form-control script-editor mb-3" placeholder="Enter your script here..."></textarea>
+                    <p class="text-muted small mb-0">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Tip: Keep sentences short and punchy for maximum impact.
+                    </p>
+                </div>
+                
+                <!-- Refinement Section -->
+                <div class="border-top pt-4 mt-4">
+                    <label class="fw-medium mb-2 d-block">Not quite right?</label>
+                    <div class="input-group">
+                        <input type="text" id="refinementInput" class="form-control refinement-input" 
+                               placeholder="e.g., Make it more energetic, add urgency, focus on price...">
+                        <button class="btn btn-outline-primary" onclick="regenerateWithRefinement()">
+                            <i class="bi bi-arrow-repeat me-1"></i>Regenerate
+                        </button>
+                    </div>
+                    <div id="refinementLoading" class="mt-2 d-none">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <span class="text-muted small ms-2">Refining your script...</span>
+                    </div>
+                </div>
+                
+                <!-- Action Buttons -->
+                <div class="d-flex justify-content-between align-items-center mt-4 pt-4 border-top">
+                    <button class="btn btn-outline-danger" onclick="deleteScript()">
+                        <i class="bi bi-trash me-1"></i>Delete
+                    </button>
+                    <div class="d-flex gap-2">
+                        <button id="generateNewBtn" class="btn btn-outline-primary" onclick="generateScript()">
+                            <i class="bi bi-magic me-1"></i>Generate New
+                        </button>
+                        <button id="approveBtn" class="btn btn-success" onclick="approveScript()">
+                            <i class="bi bi-check-circle me-1"></i>Approve & Continue
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Tips Card -->
+        <div class="content-card mt-4">
+            <h6 class="mb-3"><i class="bi bi-lightbulb me-2"></i>Script Writing Tips</h6>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <div class="d-flex">
+                        <i class="bi bi-1-circle-fill text-primary me-2 mt-1"></i>
+                        <div>
+                            <strong>Hook Fast</strong>
+                            <p class="text-muted small mb-0">Grab attention in the first 3 seconds with a bold statement or question.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="d-flex">
+                        <i class="bi bi-2-circle-fill text-primary me-2 mt-1"></i>
+                        <div>
+                            <strong>Benefits Over Features</strong>
+                            <p class="text-muted small mb-0">Focus on how the product improves the customer's life.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="d-flex">
+                        <i class="bi bi-3-circle-fill text-primary me-2 mt-1"></i>
+                        <div>
+                            <strong>Clear CTA</strong>
+                            <p class="text-muted small mb-0">End with a specific, actionable call-to-action.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="d-flex">
+                        <i class="bi bi-4-circle-fill text-primary me-2 mt-1"></i>
+                        <div>
+                            <strong>Keep It Conversational</strong>
+                            <p class="text-muted small mb-0">Write how people talk. Short sentences. Natural flow.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Delete Script?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Are you sure you want to delete this script? This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Approve Confirmation Modal -->
+<div class="modal fade" id="approveModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Approve Script?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Once approved, you'll move to the Video Generation phase where we'll create clips based on this script.</p>
+                <div class="alert alert-info">
+                    <i class="bi bi-info-circle me-2"></i>
+                    You can always come back and regenerate the script if needed.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" onclick="confirmApprove()">
+                    <i class="bi bi-check-circle me-1"></i>Approve & Continue
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const useCaseId = {{ use_case.id }};
+const targetDuration = {{ use_case.duration_target }};
+let currentScript = null;
+
+// Load script on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadScript();
+});
+
+async function loadScript() {
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/script`);
+        if (response.ok) {
+            const data = await response.json();
+            currentScript = data;
+            showScript(data);
+        } else {
+            showEmptyState();
+        }
+    } catch (error) {
+        console.error('Error loading script:', error);
+        showEmptyState();
+    }
+}
+
+function showEmptyState() {
+    document.getElementById('emptyState').classList.remove('d-none');
+    document.getElementById('scriptContainer').classList.add('d-none');
+    document.getElementById('scriptStatus').textContent = 'No Script';
+    document.getElementById('scriptStatus').className = 'badge bg-secondary';
+}
+
+function showScript(script) {
+    document.getElementById('emptyState').classList.add('d-none');
+    document.getElementById('scriptContainer').classList.remove('d-none');
+    
+    // Update status badge
+    const statusMap = {
+        'draft': { text: 'Draft', class: 'bg-secondary' },
+        'generated': { text: 'Generated', class: 'bg-info' },
+        'approved': { text: 'Approved', class: 'bg-success' }
+    };
+    const status = statusMap[script.status] || { text: script.status, class: 'bg-secondary' };
+    document.getElementById('scriptStatus').textContent = status.text;
+    document.getElementById('scriptStatus').className = `badge ${status.class}`;
+    
+    // Update display
+    document.getElementById('scriptDisplay').textContent = script.content;
+    document.getElementById('scriptEditor').value = script.content;
+    
+    // Update stats
+    const wordCount = script.content.split(/\s+/).filter(w => w.length > 0).length;
+    const estimatedDuration = script.estimated_duration || Math.ceil(wordCount / 2.3);
+    const durationDiff = estimatedDuration - targetDuration;
+    
+    document.getElementById('wordCount').textContent = wordCount;
+    document.getElementById('estimatedDuration').textContent = estimatedDuration + 's';
+    
+    const diffElement = document.getElementById('durationDiff');
+    diffElement.textContent = (durationDiff >= 0 ? '+' : '') + durationDiff + 's';
+    diffElement.className = 'stat-value ' + (Math.abs(durationDiff) > 3 ? 'word-count-warning' : 'word-count-ok');
+    
+    // Show/hide duration warning
+    const warning = document.getElementById('durationWarning');
+    if (Math.abs(durationDiff) > 3) {
+        warning.classList.remove('d-none');
+        document.getElementById('durationDiffText').textContent = 
+            durationDiff > 0 ? `${durationDiff}s over` : `${Math.abs(durationDiff)}s under`;
+    } else {
+        warning.classList.add('d-none');
+    }
+    
+    // Show approve button only if not already approved
+    if (script.status === 'approved') {
+        document.getElementById('approveBtn').classList.add('d-none');
+    } else {
+        document.getElementById('approveBtn').classList.remove('d-none');
+    }
+}
+
+async function generateScript() {
+    document.getElementById('generateBtn').disabled = true;
+    document.getElementById('generateLoading').classList.remove('d-none');
+    
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/script`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            currentScript = data.script;
+            showScript(data.script);
+        } else {
+            alert('Error generating script: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to generate script. Please try again.');
+    } finally {
+        document.getElementById('generateBtn').disabled = false;
+        document.getElementById('generateLoading').classList.add('d-none');
+    }
+}
+
+function enableEdit() {
+    document.getElementById('scriptDisplaySection').classList.add('d-none');
+    document.getElementById('scriptEditorSection').classList.remove('d-none');
+    document.getElementById('scriptEditor').focus();
+}
+
+function cancelEdit() {
+    document.getElementById('scriptDisplaySection').classList.remove('d-none');
+    document.getElementById('scriptEditorSection').classList.add('d-none');
+    // Restore original content
+    if (currentScript) {
+        document.getElementById('scriptEditor').value = currentScript.content;
+    }
+}
+
+async function saveScript() {
+    const newContent = document.getElementById('scriptEditor').value.trim();
+    if (!newContent) {
+        alert('Please enter a script.');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/script`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: newContent })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            currentScript = data.script;
+            showScript(data.script);
+            document.getElementById('scriptDisplaySection').classList.remove('d-none');
+            document.getElementById('scriptEditorSection').classList.add('d-none');
+        } else {
+            alert('Error saving script: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to save script. Please try again.');
+    }
+}
+
+async function regenerateWithRefinement() {
+    const refinement = document.getElementById('refinementInput').value.trim();
+    if (!refinement) {
+        // Just regenerate without refinement
+        generateScript();
+        return;
+    }
+    
+    document.getElementById('refinementInput').disabled = true;
+    document.getElementById('refinementLoading').classList.remove('d-none');
+    
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/script/regenerate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refinement: refinement })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            currentScript = data.script;
+            showScript(data.script);
+            document.getElementById('refinementInput').value = '';
+        } else {
+            alert('Error regenerating script: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to regenerate script. Please try again.');
+    } finally {
+        document.getElementById('refinementInput').disabled = false;
+        document.getElementById('refinementLoading').classList.add('d-none');
+    }
+}
+
+function deleteScript() {
+    const modal = new bootstrap.Modal(document.getElementById('deleteModal'));
+    modal.show();
+}
+
+async function confirmDelete() {
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/script`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            currentScript = null;
+            showEmptyState();
+            bootstrap.Modal.getInstance(document.getElementById('deleteModal')).hide();
+        } else {
+            const data = await response.json();
+            alert('Error deleting script: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to delete script. Please try again.');
+    }
+}
+
+function approveScript() {
+    const modal = new bootstrap.Modal(document.getElementById('approveModal'));
+    modal.show();
+}
+
+async function confirmApprove() {
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/script/approve`, {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            currentScript = data.script;
+            showScript(data.script);
+            bootstrap.Modal.getInstance(document.getElementById('approveModal')).hide();
+            
+            // Redirect to video generation after a brief delay
+            setTimeout(() => {
+                window.location.href = `/video-gen/${useCaseId}`;
+            }, 1000);
+        } else {
+            alert('Error approving script: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to approve script. Please try again.');
+    }
+}
+</script>
+{% endblock %}

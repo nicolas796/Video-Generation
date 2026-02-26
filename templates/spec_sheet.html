@@ -1,0 +1,713 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.name }} - Spec Sheet - Product Video Generator{% endblock %}
+
+{% block extra_css %}
+<style>
+    .asset-card {
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        border: 1px solid #e9ecef;
+        transition: all 0.2s ease;
+    }
+    
+    .asset-card:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    .asset-image {
+        width: 100%;
+        height: 200px;
+        object-fit: cover;
+        cursor: pointer;
+    }
+    
+    .asset-info {
+        padding: 1rem;
+    }
+    
+    .asset-title {
+        font-size: 0.9rem;
+        font-weight: 500;
+        margin-bottom: 0.25rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    
+    .asset-meta {
+        font-size: 0.8rem;
+        color: #6c757d;
+    }
+    
+    .spec-table {
+        width: 100%;
+    }
+    
+    .spec-table td {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #e9ecef;
+    }
+    
+    .spec-table td:first-child {
+        font-weight: 500;
+        color: #6c757d;
+        width: 40%;
+    }
+    
+    .spec-table tr:last-child td {
+        border-bottom: none;
+    }
+    
+    .review-card {
+        background: white;
+        border-radius: 8px;
+        padding: 1rem;
+        border: 1px solid #e9ecef;
+        margin-bottom: 0.75rem;
+    }
+    
+    .review-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5rem;
+    }
+    
+    .review-author {
+        font-weight: 500;
+    }
+    
+    .review-rating {
+        color: #ffc107;
+    }
+    
+    .review-date {
+        font-size: 0.8rem;
+        color: #6c757d;
+    }
+    
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.375rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 500;
+    }
+    
+    .status-scraped {
+        background: #d1fae5;
+        color: #065f46;
+    }
+    
+    .image-modal {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.9);
+        z-index: 1050;
+        justify-content: center;
+        align-items: center;
+    }
+    
+    .image-modal.active {
+        display: flex;
+    }
+    
+    .image-modal img {
+        max-width: 90%;
+        max-height: 90%;
+        object-fit: contain;
+    }
+    
+    .image-modal .close-btn {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        color: white;
+        font-size: 2rem;
+        cursor: pointer;
+        background: none;
+        border: none;
+    }
+    
+    .image-modal .nav-btn {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        color: white;
+        font-size: 2rem;
+        cursor: pointer;
+        background: rgba(255,255,255,0.1);
+        border: none;
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .image-modal .nav-btn:hover {
+        background: rgba(255,255,255,0.2);
+    }
+    
+    .image-modal .nav-prev {
+        left: 20px;
+    }
+    
+    .image-modal .nav-next {
+        right: 20px;
+    }
+    
+    .download-all-btn {
+        position: sticky;
+        top: 20px;
+        z-index: 10;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('main.index') }}">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('main.scrape_page') }}">Scrape</a></li>
+                <li class="breadcrumb-item active">Spec Sheet</li>
+            </ol>
+        </nav>
+        
+        <div class="d-flex justify-content-between align-items-start">
+            <div>
+                <h1 class="h3 mb-2">
+                    <i class="bi bi-file-earmark-text me-2 text-primary"></i>
+                    Product Spec Sheet
+                </h1>
+                <p class="text-muted mb-0">View and manage all extracted product data and assets</p>
+            </div>
+            <div class="d-flex gap-2">
+                <span class="status-badge status-scraped">
+                    <i class="bi bi-check-circle me-1"></i>
+                    Scraped
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- Product Info Card -->
+        <div class="content-card mb-4">
+            <div class="d-flex justify-content-between align-items-start mb-3">
+                <h5 class="mb-0">
+                    <i class="bi bi-info-circle me-2"></i>
+                    Product Information
+                </h5>
+                <button class="btn btn-sm btn-outline-primary" onclick="toggleEdit()">
+                    <i class="bi bi-pencil me-1"></i>
+                    Edit
+                </button>
+            </div>
+            
+            <div id="productInfo">
+                <h3 id="productName">{{ product.name }}</h3>
+                <p class="text-muted mb-2" id="productBrand">
+                    {% if product.brand %}
+                        {{ product.brand }}
+                    {% else %}
+                        <span class="text-muted">No brand specified</span>
+                    {% endif %}
+                </p>
+                
+                <div class="mb-3">
+                    {% if product.price %}
+                        <h4 class="text-primary mb-0">
+                            {% if product.currency %}{{ product.currency }}{% endif %} {{ product.price }}
+                        </h4>
+                    {% else %}
+                        <span class="text-muted">Price not available</span>
+                    {% endif %}
+                </div>
+                
+                <div class="mb-3">
+                    <h6>Description</h6>
+                    <p class="text-muted" id="productDescription">
+                        {% if product.description %}
+                            {{ product.description }}
+                        {% else %}
+                            No description available
+                        {% endif %}
+                    </p>
+                </div>
+                
+                <div class="mb-0">
+                    <h6>Source URL</h6>
+                    <a href="{{ product.url }}" target="_blank" class="text-break">
+                        {{ product.url }}
+                        <i class="bi bi-box-arrow-up-right ms-1 small"></i>
+                    </a>
+                </div>
+            </div>
+            
+            <!-- Edit Form (Hidden by default) -->
+            <div id="editForm" class="d-none">
+                <div class="mb-3">
+                    <label class="form-label">Product Name</label>
+                    <input type="text" class="form-control" id="editName" value="{{ product.name }}">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Brand</label>
+                    <input type="text" class="form-control" id="editBrand" value="{{ product.brand or '' }}">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Price</label>
+                    <input type="text" class="form-control" id="editPrice" value="{{ product.price or '' }}">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" id="editDescription" rows="4">{{ product.description or '' }}</textarea>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary" onclick="saveChanges()">
+                        <i class="bi bi-check me-1"></i>
+                        Save Changes
+                    </button>
+                    <button class="btn btn-outline-secondary" onclick="toggleEdit()">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Specifications Card -->
+        <div class="content-card mb-4" id="specificationsCard">
+            <h5 class="mb-3">
+                <i class="bi bi-list-check me-2"></i>
+                Specifications
+            </h5>
+            
+            <div id="specsContent">
+                <p class="text-muted">Loading specifications...</p>
+            </div>
+        </div>
+        
+        <!-- Reviews Card -->
+        <div class="content-card mb-4" id="reviewsCard">
+            <h5 class="mb-3">
+                <i class="bi bi-star me-2"></i>
+                Reviews
+            </h5>
+            
+            <div id="reviewsContent">
+                <p class="text-muted">Loading reviews...</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <!-- Actions Card -->
+        <div class="content-card mb-4">
+            <h5 class="mb-3">
+                <i class="bi bi-lightning me-2"></i>
+                Actions
+            </h5>
+            
+            <div class="d-grid gap-2">
+                <button class="btn btn-primary" onclick="downloadImages()">
+                    <i class="bi bi-download me-1"></i>
+                    Download All Images
+                </button>
+                <a href="{{ url_for('main.use_case_page', product_id=product.id) }}" class="btn btn-outline-primary">
+                    <i class="bi bi-plus-circle me-1"></i>
+                    Create Use Case
+                </a>
+                <a href="{{ url_for('main.scrape_page') }}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>
+                    Back to Scraper
+                </a>
+            </div>
+        </div>
+        
+        <!-- Stats Card -->
+        <div class="content-card mb-4">
+            <h5 class="mb-3">
+                <i class="bi bi-bar-chart me-2"></i>
+                Stats
+            </h5>
+            
+            <div class="row text-center">
+                <div class="col-6 mb-3">
+                    <div class="h4 mb-0" id="statImages">-</div>
+                    <small class="text-muted">Images</small>
+                </div>
+                <div class="col-6 mb-3">
+                    <div class="h4 mb-0" id="statSpecs">-</div>
+                    <small class="text-muted">Specs</small>
+                </div>
+                <div class="col-6">
+                    <div class="h4 mb-0" id="statReviews">-</div>
+                    <small class="text-muted">Reviews</small>
+                </div>
+                <div class="col-6">
+                    <div class="h4 mb-0" id="statVariants">-</div>
+                    <small class="text-muted">Variants</small>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Metadata Card -->
+        <div class="content-card">
+            <h5 class="mb-3">
+                <i class="bi bi-clock me-2"></i>
+                Metadata
+            </h5>
+            
+            <table class="table table-sm mb-0">
+                <tr>
+                    <td class="text-muted">Created</td>
+                    <td id="metaCreated">-</td>
+                </tr>
+                <tr>
+                    <td class="text-muted">Updated</td>
+                    <td id="metaUpdated">-</td>
+                </tr>
+                <tr>
+                    <td class="text-muted">Product ID</td>
+                    <td>{{ product.id }}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Image Gallery Row -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="content-card">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">
+                    <i class="bi bi-images me-2"></i>
+                    Asset Gallery
+                </h5>
+                <div class="btn-group">
+                    <button class="btn btn-sm btn-outline-primary" onclick="showTab('all')">All</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="showTab('local')">Local</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="showTab('remote')">Remote</button>
+                </div>
+            </div>
+            
+            <div id="assetGallery" class="row g-3">
+                <p class="text-muted">Loading assets...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Image Modal -->
+<div class="image-modal" id="imageModal">
+    <button class="close-btn" onclick="closeModal()">
+        <i class="bi bi-x-lg"></i>
+    </button>
+    <button class="nav-btn nav-prev" onclick="navigateImage(-1)">
+        <i class="bi bi-chevron-left"></i>
+    </button>
+    <img src="" alt="" id="modalImage">
+    <button class="nav-btn nav-next" onclick="navigateImage(1)">
+        <i class="bi bi-chevron-right"></i>
+    </button>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const productId = {{ product.id }};
+    let specSheet = null;
+    let currentImages = [];
+    let currentImageIndex = 0;
+    
+    document.addEventListener('DOMContentLoaded', function() {
+        loadSpecSheet();
+    });
+    
+    async function loadSpecSheet() {
+        try {
+            const response = await fetch(`/api/products/${productId}/spec-sheet`);
+            specSheet = await response.json();
+            
+            renderSpecSheet(specSheet);
+        } catch (error) {
+            console.error('Failed to load spec sheet:', error);
+            document.getElementById('specsContent').innerHTML = '<p class="text-danger">Failed to load data</p>';
+        }
+    }
+    
+    function renderSpecSheet(data) {
+        // Update stats
+        document.getElementById('statImages').textContent = data.assets.total_images;
+        document.getElementById('statSpecs').textContent = Object.keys(data.specifications).length;
+        document.getElementById('statReviews').textContent = data.reviews.count;
+        document.getElementById('statVariants').textContent = data.variants ? data.variants.length : 0;
+        
+        // Update metadata
+        document.getElementById('metaCreated').textContent = data.metadata.created_at ? 
+            new Date(data.metadata.created_at).toLocaleDateString() : '-';
+        document.getElementById('metaUpdated').textContent = data.metadata.updated_at ? 
+            new Date(data.metadata.updated_at).toLocaleDateString() : '-';
+        
+        // Render specifications
+        renderSpecifications(data.specifications);
+        
+        // Render reviews
+        renderReviews(data.reviews);
+        
+        // Render assets
+        renderAssets(data.assets);
+    }
+    
+    function renderSpecifications(specs) {
+        const container = document.getElementById('specsContent');
+        
+        if (!specs || Object.keys(specs).length === 0) {
+            container.innerHTML = '<p class="text-muted">No specifications available</p>';
+            return;
+        }
+        
+        let html = '<table class="spec-table">';
+        for (const [key, value] of Object.entries(specs)) {
+            html += `
+                <tr>
+                    <td>${escapeHtml(key)}</td>
+                    <td>${escapeHtml(String(value))}</td>
+                </tr>
+            `;
+        }
+        html += '</table>';
+        
+        container.innerHTML = html;
+    }
+    
+    function renderReviews(reviews) {
+        const container = document.getElementById('reviewsContent');
+        
+        if (!reviews.items || reviews.items.length === 0) {
+            container.innerHTML = '<p class="text-muted">No reviews available</p>';
+            return;
+        }
+        
+        container.innerHTML = reviews.items.map(review => `
+            <div class="review-card">
+                <div class="review-header">
+                    <span class="review-author">${escapeHtml(review.author)}</span>
+                    <span class="review-rating">${'★'.repeat(Math.round(review.rating || 0))}${'☆'.repeat(5 - Math.round(review.rating || 0))}</span>
+                </div>
+                ${review.title ? `<div class="fw-medium mb-1">${escapeHtml(review.title)}</div>` : ''}
+                <p class="mb-1">${escapeHtml(review.body || '')}</p>
+                ${review.date ? `<div class="review-date">${new Date(review.date).toLocaleDateString()}</div>` : ''}
+            </div>
+        `).join('');
+    }
+    
+    function renderAssets(assets) {
+        const container = document.getElementById('assetGallery');
+        currentImages = [];
+        
+        let allImages = [];
+        
+        // Add local images
+        assets.local_images.forEach(img => {
+            allImages.push({
+                url: img.url,
+                filename: img.filename,
+                type: 'local'
+            });
+        });
+        
+        // Add remote images
+        assets.remote_images.forEach(url => {
+            allImages.push({
+                url: url,
+                filename: url.split('/').pop().split('?')[0],
+                type: 'remote'
+            });
+        });
+        
+        currentImages = allImages;
+        
+        if (allImages.length === 0) {
+            container.innerHTML = '<p class="text-muted">No images available</p>';
+            return;
+        }
+        
+        container.innerHTML = allImages.map((img, index) => `
+            <div class="col-6 col-md-4 col-lg-3 asset-item" data-type="${img.type}">
+                <div class="asset-card">
+                    <img src="${img.url}" alt="${img.filename}" class="asset-image" 
+                         onclick="openModal(${index})" onerror="this.src='/static/placeholder.png'">
+                    <div class="asset-info">
+                        <div class="asset-title">${escapeHtml(img.filename)}</div>
+                        <div class="asset-meta">
+                            <span class="badge bg-${img.type === 'local' ? 'success' : 'info'}">${img.type}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+    
+    function showTab(type) {
+        const items = document.querySelectorAll('.asset-item');
+        items.forEach(item => {
+            if (type === 'all' || item.dataset.type === type) {
+                item.style.display = 'block';
+            } else {
+                item.style.display = 'none';
+            }
+        });
+    }
+    
+    function openModal(index) {
+        currentImageIndex = index;
+        updateModalImage();
+        document.getElementById('imageModal').classList.add('active');
+        document.body.style.overflow = 'hidden';
+    }
+    
+    function closeModal() {
+        document.getElementById('imageModal').classList.remove('active');
+        document.body.style.overflow = '';
+    }
+    
+    function navigateImage(direction) {
+        currentImageIndex += direction;
+        if (currentImageIndex < 0) {
+            currentImageIndex = currentImages.length - 1;
+        } else if (currentImageIndex >= currentImages.length) {
+            currentImageIndex = 0;
+        }
+        updateModalImage();
+    }
+    
+    function updateModalImage() {
+        const img = currentImages[currentImageIndex];
+        document.getElementById('modalImage').src = img.url;
+    }
+    
+    function toggleEdit() {
+        const infoDiv = document.getElementById('productInfo');
+        const formDiv = document.getElementById('editForm');
+        
+        if (formDiv.classList.contains('d-none')) {
+            infoDiv.classList.add('d-none');
+            formDiv.classList.remove('d-none');
+        } else {
+            infoDiv.classList.remove('d-none');
+            formDiv.classList.add('d-none');
+        }
+    }
+    
+    async function saveChanges() {
+        const data = {
+            name: document.getElementById('editName').value,
+            brand: document.getElementById('editBrand').value,
+            price: document.getElementById('editPrice').value,
+            description: document.getElementById('editDescription').value
+        };
+        
+        try {
+            const response = await fetch(`/api/products/${productId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            });
+            
+            if (response.ok) {
+                // Update UI
+                document.getElementById('productName').textContent = data.name;
+                document.getElementById('productBrand').textContent = data.brand || 'No brand specified';
+                document.getElementById('productDescription').textContent = data.description || 'No description available';
+                
+                toggleEdit();
+            } else {
+                alert('Failed to save changes');
+            }
+        } catch (error) {
+            alert('Error saving changes: ' + error.message);
+        }
+    }
+    
+    async function downloadImages() {
+        const btn = document.querySelector('button[onclick="downloadImages()"]');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Downloading...';
+        
+        try {
+            const response = await fetch(`/api/products/${productId}/download-images`, {
+                method: 'POST'
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                btn.innerHTML = '<i class="bi bi-check me-1"></i>Downloaded!';
+                btn.classList.remove('btn-primary');
+                btn.classList.add('btn-success');
+                
+                // Reload spec sheet to show local images
+                loadSpecSheet();
+                
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-download me-1"></i>Download All Images';
+                    btn.classList.add('btn-primary');
+                    btn.classList.remove('btn-success');
+                }, 2000);
+            } else {
+                throw new Error(result.error || 'Download failed');
+            }
+        } catch (error) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-download me-1"></i>Download All Images';
+            alert('Error downloading images: ' + error.message);
+        }
+    }
+    
+    // Use case creation is now handled by navigating to the use_case page
+    
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    // Keyboard navigation for modal
+    document.addEventListener('keydown', function(e) {
+        if (!document.getElementById('imageModal').classList.contains('active')) return;
+        
+        if (e.key === 'Escape') {
+            closeModal();
+        } else if (e.key === 'ArrowLeft') {
+            navigateImage(-1);
+        } else if (e.key === 'ArrowRight') {
+            navigateImage(1);
+        }
+    });
+    
+    // Close modal on background click
+    document.getElementById('imageModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeModal();
+        }
+    });
+</script>
+{% endblock %}

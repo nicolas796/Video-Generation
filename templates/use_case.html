@@ -1,0 +1,683 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.name }} - Use Cases - Product Video Generator{% endblock %}
+
+{% block extra_css %}
+<style>
+    .use-case-card {
+        background: white;
+        border-radius: 12px;
+        border: 1px solid #e9ecef;
+        transition: all 0.2s ease;
+        overflow: hidden;
+    }
+    
+    .use-case-card:hover {
+        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    
+    .use-case-header {
+        padding: 1rem 1.25rem;
+        background: #f8f9fa;
+        border-bottom: 1px solid #e9ecef;
+    }
+    
+    .use-case-body {
+        padding: 1.25rem;
+    }
+    
+    .format-badge, .style-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.25rem 0.75rem;
+        border-radius: 6px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        margin-right: 0.5rem;
+        margin-bottom: 0.5rem;
+        background: #f8f9fa;
+    }
+    
+    .voice-selector {
+        max-height: 300px;
+        overflow-y: auto;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+    }
+    
+    .voice-option {
+        display: flex;
+        align-items: center;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #f0f0f0;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+    
+    .voice-option:last-child { border-bottom: none; }
+    .voice-option:hover { background: #f8f9fa; }
+    .voice-option.selected {
+        background: #e7f3ff;
+        border-left: 3px solid #0d6efd;
+    }
+    
+    .voice-option input[type="radio"] { margin-right: 0.75rem; }
+    
+    .voice-details { flex: 1; }
+    .voice-name { font-weight: 500; font-size: 0.95rem; }
+    .voice-category { font-size: 0.75rem; color: #6c757d; }
+    .voice-preview-btn { padding: 0.25rem 0.75rem; font-size: 0.8rem; }
+    
+    .config-form-group { margin-bottom: 1.5rem; }
+    
+    .config-label {
+        font-weight: 500;
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+    }
+    
+    .config-label i { margin-right: 0.5rem; color: #0d6efd; }
+    
+    .format-option, .style-option {
+        position: relative;
+        padding: 1rem;
+        border: 2px solid #dee2e6;
+        border-radius: 8px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    
+    .format-option:hover, .style-option:hover { border-color: #adb5bd; }
+    .format-option.selected, .style-option.selected {
+        border-color: #0d6efd;
+        background: #e7f3ff;
+    }
+    
+    .format-icon { font-size: 2rem; margin-bottom: 0.5rem; }
+    .format-dimensions { font-size: 0.75rem; color: #6c757d; }
+    .style-icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    
+    .preview-player {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 1rem;
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 3rem;
+        color: #6c757d;
+    }
+    
+    .empty-state-icon { font-size: 3rem; margin-bottom: 1rem; }
+    
+    .status-badge-uc {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.375rem 0.75rem;
+        border-radius: 20px;
+        font-size: 0.8rem;
+        font-weight: 500;
+    }
+    
+    .status-draft { background: #f3f4f6; color: #6c757d; }
+    .status-configured { background: #dbeafe; color: #1e40af; }
+    .status-generating { background: #fef3c7; color: #92400e; }
+    .status-complete { background: #d1fae5; color: #065f46; }
+    
+    .duration-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.75rem;
+        color: #6c757d;
+        margin-top: 0.25rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item"><a href="{{ url_for('main.index') }}">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('main.scrape_page') }}">Scrape</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('main.spec_sheet_page', product_id=product.id) }}">Spec Sheet</a></li>
+                <li class="breadcrumb-item active">Use Cases</li>
+            </ol>
+        </nav>
+        
+        <div class="d-flex justify-content-between align-items-start">
+            <div>
+                <h1 class="h3 mb-2">
+                    <i class="bi bi-bullseye me-2 text-primary"></i>
+                    Use Case Configuration
+                </h1>
+                <p class="text-muted mb-0">Configure video format, style, and voice for <strong>{{ product.name }}</strong></p>
+            </div>
+            <div class="d-flex gap-2">
+                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createUseCaseModal">
+                    <i class="bi bi-plus-lg me-1"></i>New Use Case
+                </button>
+                <a href="{{ url_for('main.spec_sheet_page', product_id=product.id) }}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back to Spec Sheet
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Use Cases List -->
+    <div class="col-lg-8">
+        <div class="content-card">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0"><i class="bi bi-collection me-2"></i>Your Use Cases</h5>
+                <span class="text-muted" id="useCaseCount">Loading...</span>
+            </div>
+            <div id="useCasesList">
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Quick Stats -->
+    <div class="col-lg-4">
+        <div class="content-card mb-4">
+            <h5 class="mb-3"><i class="bi bi-info-circle me-2"></i>Product Info</h5>
+            <p class="mb-1"><strong>{{ product.name }}</strong></p>
+            <p class="text-muted mb-2">{% if product.brand %}{{ product.brand }}{% else %}No brand{% endif %}</p>
+            <p class="mb-0">
+                <a href="{{ product.url }}" target="_blank" class="text-break small">View Source <i class="bi bi-box-arrow-up-right ms-1"></i></a>
+            </p>
+        </div>
+        
+        <div class="content-card">
+            <h5 class="mb-3"><i class="bi bi-lightbulb me-2"></i>Tips</h5>
+            <ul class="list-unstyled mb-0 small text-muted">
+                <li class="mb-2"><i class="bi bi-check2 text-success me-2"></i>Use 9:16 for TikTok/Reels</li>
+                <li class="mb-2"><i class="bi bi-check2 text-success me-2"></i>9:16 and 16:9 are most versatile</li>
+                <li class="mb-2"><i class="bi bi-check2 text-success me-2"></i>Preview voices before saving</li>
+                <li class="mb-2"><i class="bi bi-check2 text-success me-2"></i>Target 15-30 seconds for best engagement</li>
+                <li class="mb-0"><i class="bi bi-check2 text-success me-2"></i>Duplicate use cases to experiment</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<!-- Create/Edit Use Case Modal -->
+<div class="modal fade" id="createUseCaseModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-bullseye me-2"></i><span id="modalTitle">New Use Case</span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="useCaseForm">
+                    <input type="hidden" id="useCaseId" value="">
+                    
+                    <!-- Name -->
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-tag"></i>Use Case Name</label>
+                        <input type="text" class="form-control" id="ucName" placeholder="e.g., TikTok Product Demo" required>
+                    </div>
+                    
+                    <!-- Video Format -->
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-aspect-ratio"></i>Video Format</label>
+                        <div class="row g-2">
+                            <div class="col-3">
+                                <div class="format-option selected" data-format="9:16" onclick="selectFormat('9:16')">
+                                    <div class="format-icon">📱</div><div>9:16</div><div class="format-dimensions">Vertical</div>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="format-option" data-format="16:9" onclick="selectFormat('16:9')">
+                                    <div class="format-icon">💻</div><div>16:9</div><div class="format-dimensions">Horizontal</div>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="format-option" data-format="1:1" onclick="selectFormat('1:1')">
+                                    <div class="format-icon">⬜</div><div>1:1</div><div class="format-dimensions">Square</div>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="format-option" data-format="4:5" onclick="selectFormat('4:5')">
+                                    <div class="format-icon">📸</div><div>4:5</div><div class="format-dimensions">Instagram</div>
+                                </div>
+                            </div>
+                        </div>
+                        <input type="hidden" id="ucFormat" value="9:16">
+                    </div>
+                    
+                    <!-- Style -->
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-palette"></i>Visual Style</label>
+                        <div class="row g-2">
+                            <div class="col-3">
+                                <div class="style-option selected" data-style="realistic" onclick="selectStyle('realistic')">
+                                    <div class="style-icon">📷</div><div>Realistic</div>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="style-option" data-style="cinematic" onclick="selectStyle('cinematic')">
+                                    <div class="style-icon">🎬</div><div>Cinematic</div>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="style-option" data-style="animated" onclick="selectStyle('animated')">
+                                    <div class="style-icon">✨</div><div>Animated</div>
+                                </div>
+                            </div>
+                            <div class="col-3">
+                                <div class="style-option" data-style="comic" onclick="selectStyle('comic')">
+                                    <div class="style-icon">💥</div><div>Comic</div>
+                                </div>
+                            </div>
+                        </div>
+                        <input type="hidden" id="ucStyle" value="realistic">
+                    </div>
+                    
+                    <!-- Duration -->
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-clock"></i>Target Duration: <span id="durationValue">15</span> seconds</label>
+                        <input type="range" class="form-range" id="ucDuration" min="10" max="60" value="15" step="5" oninput="updateDuration(this.value)">
+                        <div class="duration-labels"><span>10s</span><span>Short-form sweet spot (15-30s)</span><span>60s</span></div>
+                    </div>
+                    
+                    <!-- Goal/CTA -->
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-megaphone"></i>Call to Action / Goal</label>
+                        <input type="text" class="form-control" id="ucGoal" placeholder="e.g., Shop now and get 20% off!">
+                    </div>
+                    
+                    <!-- Target Audience -->
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-people"></i>Target Audience</label>
+                        <input type="text" class="form-control" id="ucAudience" placeholder="e.g., Young professionals aged 25-35">
+                    </div>
+                    
+                    <!-- Estimated Clips (read-only) -->
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-film"></i>Estimated Clips</label>
+                        <div class="border rounded px-3 py-2 d-flex justify-content-between align-items-center bg-light">
+                            <div>
+                                <div class="fw-semibold" id="clipEstimate">3 clips</div>
+                                <small class="text-muted">Auto-calculated from duration</small>
+                            </div>
+                            <span class="text-muted small"><i class="bi bi-lock-fill me-1"></i>Automatic</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Voice Selection -->
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-mic"></i>Voice Selection</label>
+                        <div class="voice-selector" id="voiceSelector">
+                            <div class="text-center py-3 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading voices...</div>
+                        </div>
+                        <input type="hidden" id="ucVoiceId" value="">
+                        
+                        <!-- Voice Preview Section -->
+                        <div class="preview-player d-none" id="voicePreviewSection">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="fw-medium"><i class="bi bi-headphones me-2"></i>Voice Preview</span>
+                                <button type="button" class="btn btn-sm btn-outline-primary" onclick="generateVoicePreview()">
+                                    <i class="bi bi-play-fill me-1"></i>Generate Preview
+                                </button>
+                            </div>
+                            <textarea class="form-control form-control-sm mb-2" id="previewText" rows="2">Welcome to our amazing product! This voice will guide your viewers through an incredible experience.</textarea>
+                            <audio controls class="w-100 d-none" id="previewAudio"><source src="" type="audio/mpeg"></audio>
+                            <div class="text-center py-2 d-none" id="previewLoading">
+                                <div class="spinner-border spinner-border-sm text-primary"></div>
+                                <span class="ms-2 text-muted small">Generating preview...</span>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveUseCase()">
+                    <i class="bi bi-check-lg me-1"></i>Save Use Case
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div class="modal fade" id="deleteModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-exclamation-triangle text-danger me-2"></i>Delete Use Case</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete this use case? This action cannot be undone.</p>
+                <p class="text-muted mb-0" id="deleteUseCaseName"></p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="confirmDelete()">
+                    <i class="bi bi-trash me-1"></i>Delete
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const productId = {{ product.id }};
+let useCases = [];
+let voices = [];
+let selectedVoiceId = '';
+let deleteUseCaseId = null;
+let createModal = null;
+let deleteModal = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    createModal = new bootstrap.Modal(document.getElementById('createUseCaseModal'));
+    deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+    loadUseCases();
+    loadVoices();
+    document.getElementById('createUseCaseModal').addEventListener('hidden.bs.modal', resetForm);
+    updateClipEstimate(document.getElementById('ucDuration').value);
+});
+
+async function loadUseCases() {
+    try {
+        const response = await fetch(`/api/products/${productId}/use-cases`);
+        useCases = await response.json();
+        renderUseCases();
+    } catch (error) {
+        document.getElementById('useCasesList').innerHTML = '<p class="text-danger">Failed to load use cases</p>';
+    }
+}
+
+function renderUseCases() {
+    document.getElementById('useCaseCount').textContent = `${useCases.length} use case${useCases.length !== 1 ? 's' : ''}`;
+    
+    if (useCases.length === 0) {
+        document.getElementById('useCasesList').innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">🎯</div>
+                <h5>No use cases yet</h5>
+                <p>Create your first use case to configure video settings</p>
+                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createUseCaseModal">
+                    <i class="bi bi-plus-lg me-1"></i>Create Use Case
+                </button>
+            </div>`;
+        return;
+    }
+    
+    const html = useCases.map(uc => `
+        <div class="use-case-card mb-3">
+            <div class="use-case-header d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center">
+                    <h6 class="mb-0 me-3">${escapeHtml(uc.name)}</h6>
+                    <span class="status-badge-uc status-${uc.status}">${uc.status}</span>
+                </div>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-primary" onclick="editUseCase(${uc.id})" title="Edit"><i class="bi bi-pencil"></i></button>
+                    <button class="btn btn-outline-secondary" onclick="duplicateUseCase(${uc.id})" title="Duplicate"><i class="bi bi-copy"></i></button>
+                    <button class="btn btn-outline-danger" onclick="showDeleteModal(${uc.id}, '${escapeHtml(uc.name)}')" title="Delete"><i class="bi bi-trash"></i></button>
+                </div>
+            </div>
+            <div class="use-case-body">
+                <div class="mb-3">
+                    <span class="format-badge"><i class="bi bi-aspect-ratio me-1"></i>${uc.format}</span>
+                    <span class="style-badge"><i class="bi bi-palette me-1"></i>${uc.style}</span>
+                    <span class="format-badge"><i class="bi bi-clock me-1"></i>${uc.duration_target}s</span>
+                    <span class="style-badge"><i class="bi bi-film me-1"></i>${uc.num_clips} clips</span>
+                </div>
+                ${uc.goal ? `<div class="mb-2"><small class="text-muted">CTA:</small><span class="ms-1">${escapeHtml(uc.goal)}</span></div>` : ''}
+                ${uc.target_audience ? `<div class="mb-2"><small class="text-muted">Audience:</small><span class="ms-1">${escapeHtml(uc.target_audience)}</span></div>` : ''}
+                <div class="d-flex align-items-center">
+                    <small class="text-muted">Voice:</small>
+                    <span class="ms-2">${uc.voice_id ? `<i class="bi bi-mic-fill text-primary me-1"></i>${escapeHtml(getVoiceName(uc.voice_id))}` : '<span class="text-muted"><i class="bi bi-mic-mute me-1"></i>Not selected</span>'}</span>
+                </div>
+                <div class="mt-3 pt-3 border-top">
+                    <a href="/script/${uc.id}" class="btn btn-primary btn-sm w-100">
+                        <i class="bi bi-file-text me-1"></i>${uc.status === 'generating' || uc.status === 'complete' ? 'View Script' : 'Generate Script'}
+                    </a>
+                </div>
+            </div>
+        </div>`).join('');
+    
+    document.getElementById('useCasesList').innerHTML = html;
+}
+
+async function loadVoices() {
+    try {
+        const response = await fetch('/api/voices');
+        const data = await response.json();
+        voices = data.voices || [];
+        renderVoiceSelector();
+    } catch (error) {
+        document.getElementById('voiceSelector').innerHTML = '<p class="text-danger p-3">Failed to load voices</p>';
+    }
+}
+
+function renderVoiceSelector() {
+    if (voices.length === 0) {
+        document.getElementById('voiceSelector').innerHTML = '<p class="text-muted p-3">No voices available</p>';
+        return;
+    }
+    
+    const html = voices.map(voice => `
+        <div class="voice-option ${selectedVoiceId === voice.voice_id ? 'selected' : ''}" onclick="selectVoice('${voice.voice_id}')">
+            <input type="radio" name="voice" value="${voice.voice_id}" ${selectedVoiceId === voice.voice_id ? 'checked' : ''}>
+            <div class="voice-details">
+                <div class="voice-name">${escapeHtml(voice.name)}</div>
+                <div class="voice-category">${escapeHtml(voice.category || 'Premade')}</div>
+            </div>
+            <button type="button" class="btn btn-sm btn-outline-secondary voice-preview-btn" onclick="event.stopPropagation(); quickPreview('${voice.voice_id}')">
+                <i class="bi bi-play-fill"></i>
+            </button>
+        </div>`).join('');
+    
+    document.getElementById('voiceSelector').innerHTML = html;
+}
+
+function selectVoice(voiceId) {
+    selectedVoiceId = voiceId;
+    document.getElementById('ucVoiceId').value = voiceId;
+    renderVoiceSelector();
+    document.getElementById('voicePreviewSection').classList.remove('d-none');
+}
+
+function getVoiceName(voiceId) {
+    const voice = voices.find(v => v.voice_id === voiceId);
+    return voice ? voice.name : voiceId;
+}
+
+function selectFormat(format) {
+    document.querySelectorAll('.format-option').forEach(el => el.classList.remove('selected'));
+    document.querySelector(`.format-option[data-format="${format}"]`).classList.add('selected');
+    document.getElementById('ucFormat').value = format;
+}
+
+function selectStyle(style) {
+    document.querySelectorAll('.style-option').forEach(el => el.classList.remove('selected'));
+    document.querySelector(`.style-option[data-style="${style}"]`).classList.add('selected');
+    document.getElementById('ucStyle').value = style;
+}
+
+function updateDuration(value) {
+    document.getElementById('durationValue').textContent = value;
+    updateClipEstimate(value);
+}
+
+function updateClipEstimate(value) {
+    const clipCount = calculateClipsForDuration(parseInt(value, 10));
+    const el = document.getElementById('clipEstimate');
+    if (el) {
+        el.textContent = `${clipCount} clip${clipCount === 1 ? '' : 's'}`;
+    }
+}
+
+function calculateClipsForDuration(duration) {
+    if (!duration) return 4;
+    if (duration <= 15) return 3;
+    if (duration <= 25) return 4;
+    if (duration <= 40) return 5;
+    return 6;
+}
+
+async function generateVoicePreview() {
+    const voiceId = document.getElementById('ucVoiceId').value;
+    const text = document.getElementById('previewText').value;
+    
+    if (!voiceId) { alert('Please select a voice first'); return; }
+    
+    document.getElementById('previewLoading').classList.remove('d-none');
+    document.getElementById('previewAudio').classList.add('d-none');
+    
+    try {
+        const response = await fetch('/api/voices/preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ voice_id: voiceId, text: text, voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.0, use_speaker_boost: true }})
+        });
+        const result = await response.json();
+        if (result.success) {
+            const audio = document.getElementById('previewAudio');
+            audio.src = result.preview_url;
+            audio.classList.remove('d-none');
+            audio.play();
+        } else if (result.fallback) {
+            alert(result.error);
+        } else {
+            alert('Failed to generate preview: ' + (result.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('Error generating preview: ' + error.message);
+    } finally {
+        document.getElementById('previewLoading').classList.add('d-none');
+    }
+}
+
+async function quickPreview(voiceId) {
+    document.getElementById('previewText').value = 'This is a quick preview of how this voice sounds.';
+    selectVoice(voiceId);
+    await generateVoicePreview();
+}
+
+async function saveUseCase() {
+    const useCaseId = document.getElementById('useCaseId').value;
+    const data = {
+        name: document.getElementById('ucName').value,
+        format: document.getElementById('ucFormat').value,
+        style: document.getElementById('ucStyle').value,
+        duration_target: parseInt(document.getElementById('ucDuration').value),
+        goal: document.getElementById('ucGoal').value,
+        target_audience: document.getElementById('ucAudience').value,
+        voice_id: document.getElementById('ucVoiceId').value,
+        voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.0, use_speaker_boost: true }
+    };
+    
+    if (!data.name) { alert('Please enter a use case name'); return; }
+    
+    try {
+        const url = useCaseId ? `/api/use-cases/${useCaseId}` : `/api/products/${productId}/use-cases`;
+        const response = await fetch(url, {
+            method: useCaseId ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        if (response.ok) {
+            createModal.hide();
+            loadUseCases();
+        } else {
+            const error = await response.json();
+            alert('Failed to save: ' + (error.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('Error saving use case: ' + error.message);
+    }
+}
+
+function editUseCase(useCaseId) {
+    const useCase = useCases.find(uc => uc.id === useCaseId);
+    if (!useCase) return;
+    
+    document.getElementById('useCaseId').value = useCase.id;
+    document.getElementById('ucName').value = useCase.name;
+    document.getElementById('modalTitle').textContent = 'Edit Use Case';
+    selectFormat(useCase.format);
+    selectStyle(useCase.style);
+    document.getElementById('ucDuration').value = useCase.duration_target;
+    document.getElementById('durationValue').textContent = useCase.duration_target;
+    updateClipEstimate(useCase.duration_target);
+    document.getElementById('ucGoal').value = useCase.goal || '';
+    document.getElementById('ucAudience').value = useCase.target_audience || '';
+    if (useCase.voice_id) selectVoice(useCase.voice_id);
+    createModal.show();
+}
+
+async function duplicateUseCase(useCaseId) {
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/duplicate`, { method: 'POST' });
+        if (response.ok) {
+            loadUseCases();
+        } else {
+            alert('Failed to duplicate use case');
+        }
+    } catch (error) {
+        alert('Error duplicating use case: ' + error.message);
+    }
+}
+
+function showDeleteModal(useCaseId, useCaseName) {
+    deleteUseCaseId = useCaseId;
+    document.getElementById('deleteUseCaseName').textContent = useCaseName;
+    deleteModal.show();
+}
+
+async function confirmDelete() {
+    if (!deleteUseCaseId) return;
+    try {
+        const response = await fetch(`/api/use-cases/${deleteUseCaseId}`, { method: 'DELETE' });
+        if (response.ok) {
+            deleteModal.hide();
+            loadUseCases();
+        } else {
+            alert('Failed to delete use case');
+        }
+    } catch (error) {
+        alert('Error deleting use case: ' + error.message);
+    }
+    deleteUseCaseId = null;
+}
+
+function resetForm() {
+    document.getElementById('useCaseForm').reset();
+    document.getElementById('useCaseId').value = '';
+    document.getElementById('modalTitle').textContent = 'New Use Case';
+    selectFormat('9:16');
+    selectStyle('realistic');
+    document.getElementById('durationValue').textContent = '15';
+    updateClipEstimate(document.getElementById('ucDuration').value);
+    selectedVoiceId = '';
+    renderVoiceSelector();
+    document.getElementById('voicePreviewSection').classList.add('d-none');
+    document.getElementById('previewAudio').classList.add('d-none');
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

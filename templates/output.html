@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block title %}Final Output - {{ use_case.name }}{% endblock %}
+
+{% block content %}
+<div class="output-page">
+    <div class="page-header">
+        <div>
+            <h1>✨ Final Output</h1>
+            <p class="subtitle">Download-ready video for <strong>{{ product.name }}</strong> • Use case: <strong>{{ use_case.name }}</strong></p>
+        </div>
+        <div class="header-actions">
+            <a href="/assembly/{{ use_case.id }}" class="btn btn-outline-secondary"><i class="bi bi-arrow-left"></i> Back to Assembly</a>
+        </div>
+    </div>
+
+    <div class="output-grid">
+        <div class="preview-card" id="previewCard">
+            {% if final_video and final_video.file_path %}
+                <video id="finalVideo" controls playsinline poster="{{ final_video.thumbnail_path and ('/uploads/' ~ final_video.thumbnail_path) }}">
+                    <source src="/uploads/{{ final_video.file_path }}" type="video/mp4">
+                </video>
+                <div class="preview-meta">
+                    <span class="badge bg-success">Ready</span>
+                    <span id="durationBadge">{{ final_video.duration or '—' }}s</span>
+                </div>
+            {% else %}
+                <div class="preview-empty">
+                    <p>No final render yet. Run the render step from the Assembly page.</p>
+                    <a href="/assembly/{{ use_case.id }}" class="btn btn-primary">Go to Assembly</a>
+                </div>
+            {% endif %}
+        </div>
+
+        <div class="detail-stack">
+            <div class="stats-card">
+                <h4>Video Stats</h4>
+                <div class="stat-row"><span>Duration</span><strong id="statDuration">{{ final_video.duration if final_video else '—' }}s</strong></div>
+                <div class="stat-row"><span>Resolution</span><strong id="statResolution">{{ final_video.resolution if final_video else '—' }}</strong></div>
+                <div class="stat-row"><span>File Size</span><strong id="statFileSize">{% if final_video and final_video.file_size %}{{ (final_video.file_size / (1024*1024)) | round(2) }} MB{% else %}—{% endif %}</strong></div>
+                <div class="stat-row"><span>Format</span><strong id="statFormat">{{ use_case.format }}</strong></div>
+                <div class="stat-row"><span>Transitions</span><strong id="statTransition">—</strong></div>
+                <div class="stat-row"><span>Clips Used</span><strong id="statClipCount">—</strong></div>
+            </div>
+
+            <div class="share-card">
+                <h4>Share & Export</h4>
+                <p>Copy the preview link or download the file for social uploads.</p>
+                <div class="share-actions">
+                    <button class="btn btn-outline-primary" onclick="copyShareLink()"><i class="bi bi-link-45deg"></i> Copy Preview Link</button>
+                    <a class="btn btn-primary" id="downloadBtn" href="/api/use-cases/{{ use_case.id }}/download"><i class="bi bi-download"></i> Download MP4</a>
+                </div>
+            </div>
+
+            <div class="cta-card">
+                <h4>Create Variants</h4>
+                <p>Need alternate hooks, CTAs, or aspect ratios? Spin up another render.</p>
+                <div class="cta-actions">
+                    <a class="btn btn-secondary" href="/assembly/{{ use_case.id }}">Create Another Variant</a>
+                    <a class="btn btn-outline-secondary" href="/scrape">Start New Project</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+.output-page { display: flex; flex-direction: column; gap: 1.5rem; }
+.page-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.page-header h1 { margin: 0; }
+.subtitle { color: #6c757d; margin-bottom: 0; }
+.output-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 1.5rem; }
+.preview-card { background: white; border-radius: 16px; padding: 1.25rem; box-shadow: 0 15px 35px rgba(15, 23, 42, 0.08); display: flex; flex-direction: column; gap: 1rem; }
+.preview-card video { width: 100%; border-radius: 12px; background: #000; max-height: 70vh; }
+.preview-meta { display: flex; gap: 0.75rem; align-items: center; font-size: 0.9rem; }
+.preview-empty { text-align: center; padding: 2rem 1rem; color: #6c757d; }
+.detail-stack { display: flex; flex-direction: column; gap: 1rem; }
+.stats-card, .share-card, .cta-card { background: white; border-radius: 16px; padding: 1.25rem; box-shadow: 0 10px 20px rgba(15, 23, 42, 0.05); }
+.stats-card h4, .share-card h4, .cta-card h4 { margin-top: 0; }
+.stat-row { display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid #f1f3f5; font-size: 0.95rem; }
+.stat-row:last-child { border-bottom: none; }
+.share-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
+.cta-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
+.btn { border-radius: 999px; padding: 0.5rem 1.25rem; }
+.btn-outline-secondary { border: 1px solid #ced4da; color: #495057; }
+.btn-outline-primary { border: 1px solid #0d6efd; color: #0d6efd; background: rgba(13,110,253,0.08); }
+@media (max-width: 992px) {
+    .output-grid { grid-template-columns: 1fr; }
+}
+</style>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const useCaseId = {{ use_case.id }};
+let currentVideoUrl = {% if final_video and final_video.file_path %}'/uploads/{{ final_video.file_path }}'{% else %}null{% endif %};
+
+document.addEventListener('DOMContentLoaded', () => {
+    refreshFinalVideo();
+});
+
+async function refreshFinalVideo() {
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/final-video`);
+        const data = await response.json();
+        if (!data.success) return;
+        const video = data.final_video;
+        currentVideoUrl = video.video_url;
+        updatePreview(video);
+        updateStats(video);
+    } catch (error) {
+        console.warn('Unable to load final video info', error);
+    }
+}
+
+function updatePreview(video) {
+    const previewCard = document.getElementById('previewCard');
+    if (!previewCard) return;
+
+    previewCard.innerHTML = `
+        <video id="finalVideo" controls playsinline poster="${video.thumbnail_url || ''}">
+            <source src="${video.video_url}" type="video/mp4">
+        </video>
+        <div class="preview-meta">
+            <span class="badge bg-success">Ready</span>
+            <span>${(video.duration || 0).toFixed(1)}s</span>
+        </div>
+    `;
+}
+
+function updateStats(video) {
+    const bytes = video.file_size || 0;
+    const megabytes = bytes ? (bytes / (1024 * 1024)).toFixed(2) : '—';
+    document.getElementById('statDuration').textContent = `${(video.duration || 0).toFixed(1)}s`;
+    document.getElementById('statResolution').textContent = video.resolution || '—';
+    document.getElementById('statFileSize').textContent = bytes ? `${megabytes} MB` : '—';
+    const assemblySettings = video.assembly_settings || {};
+    document.getElementById('statFormat').textContent = assemblySettings.format || '{{ use_case.format }}';
+    document.getElementById('statTransition').textContent = assemblySettings.transition || 'cut';
+    document.getElementById('statClipCount').textContent = (video.clip_ids || []).length || '—';
+    const downloadBtn = document.getElementById('downloadBtn');
+    if (downloadBtn && video.video_url) {
+        downloadBtn.href = `/api/use-cases/${useCaseId}/download`;
+    }
+}
+
+function copyShareLink() {
+    if (!currentVideoUrl) {
+        alert('Render not ready yet.');
+        return;
+    }
+    const absoluteUrl = `${window.location.origin}${currentVideoUrl}`;
+    navigator.clipboard.writeText(absoluteUrl)
+        .then(() => alert('Preview link copied to clipboard'))
+        .catch(() => alert('Unable to copy link'));
+}
+</script>
+{% endblock %}
