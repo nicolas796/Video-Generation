@@ -19,8 +19,9 @@ mkdir -p uploads/clips
 mkdir -p uploads/final
 
 # Run database migrations
+# Set a dummy SECRET_KEY for build-time migrations if not provided
 echo "Running database migrations..."
-flask db upgrade
+SECRET_KEY=${SECRET_KEY:-build-temp-key} flask db upgrade
 
 echo "=========================================="
 echo "Build completed successfully!"

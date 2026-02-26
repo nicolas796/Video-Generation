@@ -39,7 +39,7 @@ services:
       - key: ELEVENLABS_API_KEY
         sync: false
       
-      - key: OPENAI_API_KEY
+      - key: MOONSHOT_API_KEY
         sync: false
       
       - key: POLLO_WEBHOOK_SECRET
