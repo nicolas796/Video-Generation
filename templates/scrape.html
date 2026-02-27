@@ -424,12 +424,15 @@
                     'Content-Type': 'application/json',
                     'X-CSRFToken': '{{ csrf_token() }}'
                 },
-                body: JSON.stringify({ url: url, save: false })
+                body: JSON.stringify({ url: url, save: true })
             });
             
             const result = await response.json();
             
-            if (result.success) {
+            if (result.success && result.data.product_id) {
+                // Redirect directly to spec sheet after successful save
+                window.location.href = `/spec-sheet/${result.data.product_id}`;
+            } else if (result.success) {
                 scrapedData = result.data;
                 showResults(result.data);
                 updateProgressComplete();
