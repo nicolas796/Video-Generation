@@ -600,13 +600,76 @@
                     </div>
                 </div>
                 
-                <p class="text-muted small mb-3">Choose an image to use as the starting frame for your videos. This helps the AI generate videos that actually show your product.</p>
-                <div id="productImagesGrid" class="row g-3">
-                    <!-- Images will be loaded here -->
-                </div>
-                <div id="noImagesMessage" class="text-center py-4 d-none">
-                    <i class="bi bi-image text-muted fs-1"></i>
-                    <p class="text-muted mt-2">No product images found. Using text-only generation.</p>
+                <!-- Image Source Tabs -->
+                <ul class="nav nav-tabs mb-3" id="imageSourceTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="product-tab" data-bs-toggle="tab" data-bs-target="#product-images" type="button" role="tab">
+                            <i class="bi bi-image me-1"></i>Product Images
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="scene-tab" data-bs-toggle="tab" data-bs-target="#scene-generator" type="button" role="tab">
+                            <i class="bi bi-magic me-1"></i>Generate Scene
+                        </button>
+                    </li>
+                </ul>
+                
+                <div class="tab-content" id="imageSourceContent">
+                    <!-- Product Images Tab -->
+                    <div class="tab-pane fade show active" id="product-images" role="tabpanel">
+                        <p class="text-muted small mb-3">Choose a product image to use as the starting frame for your videos.</p>
+                        <div id="productImagesGrid" class="row g-3">
+                            <!-- Images will be loaded here -->
+                        </div>
+                        <div id="noImagesMessage" class="text-center py-4 d-none">
+                            <i class="bi bi-image text-muted fs-1"></i>
+                            <p class="text-muted mt-2">No product images found. Use "Generate Scene" tab instead.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Generate Scene Tab -->
+                    <div class="tab-pane fade" id="scene-generator" role="tabpanel">
+                        <p class="text-muted small mb-3">Generate a custom scene image based on your video script. This creates more engaging, narrative-driven visuals.</p>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Scene Description (optional)</label>
+                            <textarea class="form-control" id="sceneDescription" rows="3" placeholder="Describe the scene you want to generate. Leave empty to auto-generate based on script."></textarea>
+                            <div class="form-text">We'll use your video script to generate a relevant scene if left empty.</div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Scene Style</label>
+                            <select class="form-select" id="sceneStyle">
+                                <option value="realistic">Realistic / Photographic</option>
+                                <option value="cinematic">Cinematic / Movie-style</option>
+                                <option value="lifestyle">Lifestyle / Natural</option>
+                                <option value="studio">Studio / Product-focused</option>
+                                <option value="animated">3D Animation style</option>
+                            </select>
+                        </div>
+                        
+                        <div id="generatedScenePreview" class="d-none">
+                            <label class="form-label">Generated Scene</label>
+                            <div class="position-relative">
+                                <img id="generatedSceneImage" class="img-fluid rounded" alt="Generated scene">
+                                <div class="position-absolute top-0 end-0 p-2">
+                                    <button class="btn btn-sm btn-success" onclick="useGeneratedScene()">
+                                        <i class="bi bi-check-circle me-1"></i>Use This Scene
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="sceneGeneratingIndicator" class="d-none text-center py-4">
+                            <div class="spinner-border text-primary mb-2" role="status"></div>
+                            <p class="text-muted mb-0">Generating scene image...</p>
+                            <small class="text-muted">This may take 10-20 seconds</small>
+                        </div>
+                        
+                        <button class="btn btn-primary w-100" id="generateSceneBtn" onclick="generateSceneImage()">
+                            <i class="bi bi-magic me-2"></i>Generate Scene Image
+                        </button>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -1015,6 +1078,110 @@ async function addClipToLibrary(clipId) {
     } catch (error) {
         console.error('Error adding clip to library:', error);
         showToast('Failed to add clip to library', 'error');
+    }
+}
+
+let generatedSceneUrl = null;
+
+async function generateSceneImage() {
+    const description = document.getElementById('sceneDescription').value.trim();
+    const style = document.getElementById('sceneStyle').value;
+    const clipCount = getClipCountToGenerate();
+    
+    // Show generating indicator
+    document.getElementById('generateSceneBtn').classList.add('d-none');
+    document.getElementById('sceneGeneratingIndicator').classList.remove('d-none');
+    document.getElementById('generatedScenePreview').classList.add('d-none');
+    
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/generate-scene`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+            body: JSON.stringify({
+                description: description,
+                style: style,
+                clip_count: clipCount
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            generatedSceneUrl = data.image_url;
+            document.getElementById('generatedSceneImage').src = data.image_url;
+            document.getElementById('generatedScenePreview').classList.remove('d-none');
+            showToast('Scene generated successfully!');
+        } else {
+            showToast('Error: ' + (data.error || 'Failed to generate scene'), 'error');
+            document.getElementById('generateSceneBtn').classList.remove('d-none');
+        }
+    } catch (error) {
+        console.error('Error generating scene:', error);
+        showToast('Failed to generate scene', 'error');
+        document.getElementById('generateSceneBtn').classList.remove('d-none');
+    } finally {
+        document.getElementById('sceneGeneratingIndicator').classList.add('d-none');
+    }
+}
+
+function useGeneratedScene() {
+    if (!generatedSceneUrl) {
+        alert('No scene has been generated yet');
+        return;
+    }
+    
+    const clipCount = getClipCountToGenerate();
+    
+    // Close modal and start generation with the generated scene
+    const modal = bootstrap.Modal.getInstance(document.getElementById('imageSelectModal'));
+    modal.hide();
+    
+    // Start generation with the generated scene URL
+    startGenerationWithGeneratedScene(generatedSceneUrl, clipCount);
+}
+
+async function startGenerationWithGeneratedScene(imageUrl, clipCount) {
+    document.getElementById('generateSection').classList.add('d-none');
+    document.getElementById('generatingSection').classList.remove('d-none');
+    
+    const clipText = clipCount === 1 ? 'clip' : 'clips';
+    document.getElementById('generatingStatus').textContent = `Starting generation of ${clipCount} ${clipText} with generated scene...`;
+    
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/generate-clips`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+            body: JSON.stringify({ 
+                generated_scene_url: imageUrl,
+                count: clipCount
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            const startedCount = data.count || 0;
+            const queuedCount = data.queued_count || 0;
+            
+            if (queuedCount > 0) {
+                showToast(`Started ${startedCount} clip(s), ${queuedCount} queued due to rate limits.`);
+            } else {
+                showToast(`Started generation of ${startedCount} clip(s)`);
+            }
+            
+            loadClips();
+            // Start polling
+            statusInterval = setInterval(loadClips, 5000);
+        } else {
+            alert('Error starting generation: ' + (data.error || 'Unknown error'));
+            document.getElementById('generateSection').classList.remove('d-none');
+            document.getElementById('generatingSection').classList.add('d-none');
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to start generation. Please try again.');
+        document.getElementById('generateSection').classList.remove('d-none');
+        document.getElementById('generatingSection').classList.add('d-none');
     }
 }
 

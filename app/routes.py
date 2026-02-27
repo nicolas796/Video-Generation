@@ -1370,6 +1370,163 @@ def get_product_images(product_id):
     })
 
 
+@main_bp.route('/api/use-cases/<int:use_case_id>/generate-scene', methods=['POST'])
+@login_required
+def generate_scene_image(use_case_id):
+    """Generate a scene image using AI based on the video script and use case."""
+    use_case = UseCase.query.get_or_404(use_case_id)
+    product = Product.query.get_or_404(use_case.product_id)
+    script = Script.query.filter_by(use_case_id=use_case_id).first()
+    
+    try:
+        data = request.get_json() or {}
+        custom_description = data.get('description', '')
+        style = data.get('style', 'realistic')
+        clip_count = data.get('clip_count', 1)
+        
+        # Build the prompt for image generation
+        scene_prompt = build_scene_prompt(
+            product=product,
+            use_case=use_case,
+            script=script,
+            custom_description=custom_description,
+            style=style,
+            clip_count=clip_count
+        )
+        
+        # Generate image using OpenAI DALL-E
+        import openai
+        import time
+        
+        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            return jsonify({'success': False, 'error': 'OpenAI API key not configured'}), 500
+        
+        client = openai.OpenAI(api_key=api_key)
+        
+        current_app.logger.info(f'Generating scene image for use case {use_case_id}', 
+                               prompt_preview=scene_prompt[:100])
+        
+        # Generate image with DALL-E 3
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=scene_prompt,
+            size="1024x1024",  # DALL-E 3 supports 1024x1024, 1024x1792, 1792x1024
+            quality="standard",
+            n=1
+        )
+        
+        image_url = response.data[0].url
+        
+        # Download and save the image locally
+        import requests
+        from werkzeug.utils import secure_filename
+        
+        upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
+        scene_folder = os.path.join(upload_folder, 'scenes', str(use_case_id))
+        os.makedirs(scene_folder, exist_ok=True)
+        
+        timestamp = int(time.time())
+        filename = f"scene_{timestamp}.png"
+        filepath = os.path.join(scene_folder, filename)
+        
+        # Download the image
+        img_response = requests.get(image_url, timeout=30)
+        img_response.raise_for_status()
+        
+        with open(filepath, 'wb') as f:
+            f.write(img_response.content)
+        
+        # Store relative path
+        relative_path = f"scenes/{use_case_id}/{filename}"
+        
+        return jsonify({
+            'success': True,
+            'image_url': f'/uploads/{relative_path}',
+            'prompt': scene_prompt,
+            'message': 'Scene generated successfully'
+        })
+        
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"Scene generation error: {e}\n{traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def build_scene_prompt(product, use_case, script, custom_description, style, clip_count):
+    """Build an optimized prompt for scene image generation."""
+    
+    product_name = product.name or 'product'
+    product_desc = product.description or ''
+    use_case_style = use_case.style or 'realistic'
+    video_format = use_case.format or '9:16'
+    
+    # Get script content for context
+    script_content = script.content if script else ''
+    
+    # Determine clip types based on count
+    clip_types = []
+    if clip_count == 1:
+        clip_types = ['product_showcase']
+    elif clip_count == 2:
+        clip_types = ['hook', 'cta']
+    elif clip_count == 3:
+        clip_types = ['hook', 'solution', 'cta']
+    elif clip_count == 4:
+        clip_types = ['hook', 'problem', 'solution', 'cta']
+    else:
+        clip_types = ['hook', 'problem', 'solution', 'benefits', 'cta'][:clip_count]
+    
+    # Build clip type descriptions
+    clip_descriptions = {
+        'hook': f"Attention-grabbing opening scene featuring {product_name}",
+        'problem': f"Scene showing the problem that {product_name} solves",
+        'solution': f"Beautiful demonstration of {product_name} as the solution",
+        'benefits': f"Lifestyle scene showing satisfaction from using {product_name}",
+        'cta': f"Strong closing scene with {product_name} front and center",
+        'product_showcase': f"Stunning product showcase of {product_name}"
+    }
+    
+    # If user provided custom description, use it as primary
+    if custom_description:
+        scene_desc = custom_description
+    else:
+        # Auto-generate based on clip types
+        scene_desc = "; ".join([clip_descriptions.get(ct, f"Scene featuring {product_name}") for ct in clip_types])
+    
+    # Style descriptors
+    style_prompts = {
+        'realistic': 'photorealistic, professional photography, natural lighting, high detail',
+        'cinematic': 'cinematic composition, dramatic lighting, film quality, movie still',
+        'lifestyle': 'lifestyle photography, natural setting, authentic moment, warm atmosphere',
+        'studio': 'professional studio photography, clean background, perfect lighting, commercial quality',
+        'animated': '3D rendered style, smooth surfaces, vibrant colors, modern aesthetic'
+    }
+    
+    style_desc = style_prompts.get(style, style_prompts['realistic'])
+    
+    # Format guidance
+    format_guidance = {
+        '9:16': 'vertical composition, suitable for mobile/portrait format',
+        '16:9': 'horizontal composition, suitable for widescreen',
+        '1:1': 'square composition, balanced framing',
+        '4:5': 'portrait composition, Instagram-friendly'
+    }
+    
+    format_desc = format_guidance.get(video_format, 'professional composition')
+    
+    # Build final prompt
+    prompt = f"""{scene_desc}. 
+
+Product context: {product_name} - {product_desc[:100]}
+
+Style: {style_desc}. {format_desc}. 
+
+The image should be visually striking, professionally composed, and suitable as a starting frame for a video advertisement. No text, no watermarks, no logos."""
+    
+    return prompt
+
+
 @main_bp.route('/api/use-cases/<int:use_case_id>/generate-clips', methods=['POST'])
 @login_required
 def generate_video_clips(use_case_id):
@@ -1438,9 +1595,26 @@ def generate_video_clips(use_case_id):
             prompt = clip_config['prompt']
             clip_type = clip_config['clip_type']
             
-            # Get the public image URL for this clip
+            # Get the image URL for this clip
+            # Priority: 1) Generated scene URL, 2) Product images from scraping
             image_url = None
-            if product.images:
+            
+            # Check if user provided a generated scene URL
+            generated_scene_url = data.get('generated_scene_url')
+            if generated_scene_url:
+                # For local files, we need to construct the full URL for Pollo.ai
+                if generated_scene_url.startswith('/uploads/'):
+                    external_base = os.getenv('EXTERNAL_BASE_URL', '')
+                    if external_base:
+                        image_url = external_base.rstrip('/') + generated_scene_url
+                    else:
+                        # Try to construct from request host
+                        image_url = generated_scene_url
+                else:
+                    image_url = generated_scene_url
+            
+            # Fall back to product images if no generated scene
+            if not image_url and product.images:
                 if isinstance(product.images, list) and len(product.images) > 0:
                     image_index = clip_index % len(product.images)
                     image_url = product.images[image_index]
