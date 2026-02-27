@@ -116,17 +116,35 @@ class ScriptGenerator:
 
         style = use_case_config.get("style", "realistic")
         duration = use_case_config.get("duration_target", 15)
+        word_target = int(duration * 2.5)
+        
+        style_guidance = {
+            "realistic": "conversational, authentic, and relatable",
+            "cinematic": "dramatic, epic, and emotionally compelling",
+            "animated": "energetic, playful, and engaging",
+            "comic": "witty, punchy, and memorable",
+        }
+        tone = style_guidance.get(style, "conversational and engaging")
+        
         system_prompt = (
-            "You are an expert copywriter. Refine the provided script while keeping it "
-            f"optimized for a {duration}-second video in a {style} tone."
+            "You are an expert copywriter for short-form video ads. "
+            f"Refine scripts to be {tone} and exactly {word_target} words for a {duration}-second video. "
+            "Maintain: Hook → Problem → Solution → CTA structure. "
+            "Keep it punchy, benefit-focused, and scroll-stopping."
         )
-        user_prompt = f"""Current Script:
+        user_prompt = f"""CURRENT SCRIPT ({word_target} words target):
 {current_script}
 
-Refinement Request:
+REFINEMENT REQUEST:
 {refinement_request}
 
-Provide ONLY the refined script text. No explanations."""
+RULES:
+- Keep the {word_target} word count (critical!)
+- Maintain Hook → Problem → Solution → CTA flow
+- Short sentences, one breath each
+- Focus on feelings/outcomes, not features
+
+OUTPUT: Only the refined script text."""
 
         try:
             response = self._chat_completion(
@@ -204,17 +222,59 @@ Provide ONLY the refined script text. No explanations."""
     def _build_system_prompt(self, use_case_config: Dict[str, Any]) -> str:
         style = use_case_config.get("style", "realistic")
         duration = use_case_config.get("duration_target", 15)
-        tone_guidance = {
-            "realistic": "conversational, authentic, and relatable",
-            "cinematic": "dramatic, epic, and emotionally compelling",
-            "animated": "energetic, playful, and engaging",
-            "comic": "witty, punchy, and memorable",
+        # Word count target: ~2.5 words per second for natural speech
+        word_target = int(duration * 2.5)
+        
+        style_guidance = {
+            "realistic": {
+                "tone": "conversational, authentic, and relatable - like a friend recommending something",
+                "approach": "Personal, direct-to-camera style. Use 'you' and 'I'. Share a quick personal insight."
+            },
+            "cinematic": {
+                "tone": "dramatic, epic, and emotionally compelling",
+                "approach": "High stakes, aspirational language. Create a mini-story with transformation."
+            },
+            "animated": {
+                "tone": "energetic, playful, and engaging",
+                "approach": "Fun, bouncy, exclamation-friendly. Use rhythm and repetition."
+            },
+            "comic": {
+                "tone": "witty, punchy, and memorable",
+                "approach": "Clever wordplay, unexpected twist, or relatable humor."
+            },
         }
-        tone = tone_guidance.get(style, "conversational and engaging")
-        return f"""You are an expert copywriter specializing in short-form video scripts.
-Create a {duration}-second script with a {tone} tone. Hook viewers quickly, highlight benefits, and end with a CTA.
-Keep sentences short, natural, and easy to speak.
-IMPORTANT: Respond in English only. Do not use Chinese characters."""
+        style_info = style_guidance.get(style, style_guidance["realistic"])
+        
+        return f"""You are an expert copywriter for viral short-form video ads (TikTok, Reels, Shorts).
+
+MISSION: Create a {duration}-second script ({word_target} words) that stops the scroll and drives action.
+
+STRUCTURE (follow this exactly):
+1. HOOK (first 3 seconds): Pattern interrupt. Ask a question, state a bold claim, or call out the viewer directly.
+2. PROBLEM/CONTEXT (3-7 seconds): The pain point or desire this product solves.
+3. SOLUTION (7-{duration-3} seconds): The product as the hero. ONE key benefit (not feature). Make it tangible.
+4. CTA (last 3 seconds): Clear, urgent call-to-action.
+
+STYLE: {style_info['tone']}
+APPROACH: {style_info['approach']}
+
+RULES:
+- EXACTLY {word_target} words (not more, not less)
+- Benefits > Features (what it DOES for them, not what it IS)
+- One breath per sentence - short and punchy
+- No lists of specs or attributes
+- No "Introducing..." or "Meet the..." - start with the hook
+- End with the exact CTA phrase provided
+- Respond in English only
+
+EXAMPLES BY STYLE:
+Realistic: "Okay, I was skeptical too. But this thing actually cut my morning routine in half. No more frizz, no more heat damage. Just smooth hair in 5 minutes. The Dyson Airwrap? Game changer. Link in bio before they sell out again."
+
+Cinematic: "Every sunrise, a choice. Stay the same, or become who you were meant to be. This isn't just a watch. It's 365 days of discipline, wrapped around your wrist. The moment is now. Tag someone who's ready."
+
+Animated: "POV: You just discovered the snack that hits different! Crunchy, spicy, sweet - these Korean chips have NO business being this good! I ate the whole bag in one sitting. Stock up before I buy them all! Link below!"
+
+Comic: "Me before coffee: [insert zombie sounds]. Me after this mug: actually functional human. This isn't coffee, it's liquid personality restoration. Get yours before I finish the supply. Link in comments."
 
     def _build_user_prompt(
         self,
@@ -245,34 +305,50 @@ IMPORTANT: Respond in English only. Do not use Chinese characters."""
                     if text:
                         review_lines.append(f'- "{text[:100]}..."')
 
+        # Extract ONE key benefit from description or specs
+        key_benefit = description[:100] if description else ""
+        if not key_benefit and key_specs:
+            key_benefit = key_specs[0]
+        
+        # Get social proof snippet
+        social_proof = ""
+        if review_lines:
+            social_proof = review_lines[0].strip('"-')
+        
+        word_target = int(duration * 2.5)
+        
         parts = [
-            f"Create a script for {product_name}.",
+            f"TASK: Write a {duration}-second viral video script for {product_name}.",
+            f"WORD COUNT TARGET: Exactly {word_target} words (THIS IS CRITICAL - count your words!)",
             "",
-            "Product Information:",
-            f"- Name: {product_name}",
+            "=== PRODUCT DETAILS ===",
+            f"Product: {product_name}",
         ]
         if brand:
-            parts.append(f"- Brand: {brand}")
-        if price:
-            parts.append(f"- Price: {price}")
-        if description:
-            parts.append(f"- Description: {description}")
-        if key_specs:
-            parts.extend(["", "Key Specifications:"] + key_specs)
-        if review_lines:
-            parts.extend(["", "Customer Reviews:"] + review_lines)
-        parts.extend(
-            [
-                "",
-                f"Target Audience: {target_audience}",
-                f"Call to Action: {goal}",
-                f"Target Duration: {duration} seconds",
-                "",
-                "Write ONLY the spoken script. No stage directions or markdown.",
-            ]
-        )
+            parts.append(f"Brand: {brand}")
+        parts.append(f"Target Audience: {target_audience}")
+        parts.append(f"The ONE Thing They Care About: {key_benefit}")
+        if social_proof:
+            parts.append(f"Social Proof: A customer said '{social_proof}'")
+        parts.extend([
+            "",
+            "=== YOUR MISSION ===",
+            f"1. HOOK (3 sec): Grab {target_audience} immediately - what pain point or desire stops their scroll?",
+            f"2. PROBLEM (2-4 sec): The 'before' state - what sucks without this product?",
+            f"3. SOLUTION (5-{duration-5} sec): The transformation - what's different now? Use EMOTION, not specs.",
+            f"4. CTA (2 sec): '{goal}' - make it feel urgent",
+            "",
+            "=== REMINDERS ===",
+            f"- EXACTLY {word_target} words (use wordcounter.net if needed)",
+            "- Start with the HOOK, not 'Introducing' or product name",
+            "- Focus on FEELINGS and OUTCOMES, not features",
+            "- One short sentence per line for readability",
+            "- End with the exact CTA phrase",
+            "",
+            "OUTPUT: Just the spoken script. No quotes, no formatting.",
+        ])
         if existing_script:
-            parts.extend(["", "Previous script for context:", existing_script])
+            parts.extend(["", "=== PREVIOUS ATTEMPT (avoid this approach) ===", existing_script])
         return "\n".join(parts)
 
     @staticmethod
