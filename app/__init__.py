@@ -54,6 +54,14 @@ def create_app(config_name='default'):
         # Skip if RENDER environment variable is set but database is not ready
         if not os.getenv('RENDER') or os.getenv('DATABASE_URL'):
             create_default_admin()
+        
+        # Create all database tables (for new models like ClipLibrary)
+        # This ensures new tables are created without needing manual migrations
+        try:
+            db.create_all()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Could not create tables: {e}")
     
     # Register blueprints
     from app.routes import main_bp
