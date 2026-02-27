@@ -24,7 +24,7 @@ class ScriptGenerator:
             http_client = httpx.Client(timeout=60.0, follow_redirects=True)
             self.client = OpenAI(
                 api_key=self.api_key,
-                base_url="https://api.moonshot.cn/v1",
+                base_url="https://api.moonshot.ai/v1",
                 http_client=http_client
             )
         elif not offline_fallback:
@@ -65,7 +65,7 @@ class ScriptGenerator:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="kimi-k2-5",
+                model="kimi-k2.5",
                 temperature=0.8,
                 max_tokens=500,
             )
@@ -121,7 +121,7 @@ Provide ONLY the refined script text. No explanations."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="kimi-k2-5",
+                model="kimi-k2.5",
                 temperature=0.8,
                 max_tokens=500,
             )

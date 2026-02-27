@@ -40,8 +40,8 @@ class ClipAnalyzer:
         if not self.api_key:
             raise ValueError("MOONSHOT_API_KEY is required for clip analysis")
 
-        self.model = model or os.getenv("CLIP_ANALYSIS_MODEL", "kimi-k2-5")
-        self.base_url = "https://api.moonshot.cn/v1"
+        self.model = model or os.getenv("CLIP_ANALYSIS_MODEL", "kimi-k2.5")
+        self.base_url = "https://api.moonshot.ai/v1"
 
     # ---------------------------------------------------------------------
     # Public API
