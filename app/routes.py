@@ -1420,8 +1420,14 @@ def generate_video_clips(use_case_id):
         
         generated_clips = []
         errors = []
+        queued_clips = []
         
-        # Generate requested number of clips
+        # Pollo.ai has rate limits - generate clips sequentially with delays
+        # Most video generation APIs allow ~1 concurrent job and need cooldown between requests
+        DELAY_BETWEEN_CLIPS = 3  # seconds between starting each clip
+        MAX_RETRIES = 2
+        
+        # Generate requested number of clips with rate limiting
         for i in range(count):
             clip_index = existing_clips + i
             
@@ -1447,33 +1453,77 @@ def generate_video_clips(use_case_id):
                 length=5
             )
             
-            # Start generation
-            result = manager.start_generation(clip.id, image_url=image_url)
+            # Start generation with retry logic for rate limits
+            result = None
+            retry_count = 0
+            success = False
             
-            if result.get('success'):
+            while retry_count <= MAX_RETRIES and not success:
+                result = manager.start_generation(clip.id, image_url=image_url)
+                
+                if result.get('success'):
+                    success = True
+                elif result.get('error_type') == 'rate_limit' or '429' in str(result.get('error', '')):
+                    # Rate limited - wait longer and retry
+                    retry_count += 1
+                    if retry_count <= MAX_RETRIES:
+                        wait_time = DELAY_BETWEEN_CLIPS * (2 ** retry_count)  # Exponential backoff
+                        current_app.logger.warning(f'Rate limited on clip {clip.id}, waiting {wait_time}s before retry {retry_count}')
+                        import time
+                        time.sleep(wait_time)
+                else:
+                    # Other error - don't retry
+                    break
+            
+            if success:
                 generated_clips.append({
                     'clip': clip.to_dict(),
                     'clip_type': clip_type,
                     'prompt_sent': prompt,
-                    'image_url_used': image_url
+                    'image_url_used': image_url,
+                    'status': 'started'
                 })
             else:
-                errors.append({
-                    'clip_index': clip_index,
-                    'error': result.get('error', 'Failed to start generation'),
-                    'prompt_sent': prompt
-                })
+                # Check if it's a rate limit error - queue for later if so
+                if result and (result.get('error_type') == 'rate_limit' or '429' in str(result.get('error', ''))):
+                    clip.status = 'pending'  # Reset to pending so it can be retried
+                    db.session.commit()
+                    queued_clips.append({
+                        'clip_id': clip.id,
+                        'clip_type': clip_type,
+                        'prompt_sent': prompt,
+                        'status': 'queued_for_retry',
+                        'error': result.get('error')
+                    })
+                else:
+                    errors.append({
+                        'clip_index': clip_index,
+                        'clip_id': clip.id,
+                        'error': result.get('error', 'Failed to start generation') if result else 'Unknown error',
+                        'prompt_sent': prompt
+                    })
+            
+            # Add delay between clips (except for the last one)
+            if i < count - 1:
+                import time
+                current_app.logger.info(f'Waiting {DELAY_BETWEEN_CLIPS}s before starting next clip ({i+1}/{count})')
+                time.sleep(DELAY_BETWEEN_CLIPS)
         
-        if generated_clips:
+        if generated_clips or queued_clips:
             use_case.status = 'generating'
             db.session.commit()
+            
+            total_processing = len(generated_clips) + len(queued_clips)
             
             return jsonify({
                 'success': True,
                 'clips': generated_clips,
+                'queued': queued_clips if queued_clips else None,
                 'count': len(generated_clips),
+                'queued_count': len(queued_clips),
+                'total_requested': count,
                 'errors': errors if errors else None,
-                'message': f'Started generation of {len(generated_clips)} clip(s).'
+                'message': f'Started {len(generated_clips)} clip(s), queued {len(queued_clips)} for retry.' if queued_clips else f'Started generation of {len(generated_clips)} clip(s).'
             })
         else:
             return jsonify({

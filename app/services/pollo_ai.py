@@ -311,12 +311,23 @@ class PolloAIClient:
                 error=str(e)
             )
             
-            raise NonRetryableAPIError(
-                provider="Pollo.ai",
-                message=error_msg,
-                status_code=status_code,
-                retryable=False
-            ) from e
+            # Rate limits (429) should be retryable
+            is_rate_limit = status_code == 429
+            
+            if is_rate_limit:
+                raise ExternalAPIError(
+                    provider="Pollo.ai",
+                    message=error_msg,
+                    status_code=status_code,
+                    retryable=True
+                ) from e
+            else:
+                raise NonRetryableAPIError(
+                    provider="Pollo.ai",
+                    message=error_msg,
+                    status_code=status_code,
+                    retryable=False
+                ) from e
             
         except requests.exceptions.RequestException as e:
             error_msg = self._get_user_friendly_error(e)
@@ -340,7 +351,7 @@ class PolloAIClient:
                 'error_type': 'unexpected'
             }
 
-    def _get_user_friendly_error(self, exception: Exception, status_code: Optional[int] = None) -> str:
+    def _get_user_friendly_error(self, exception: Exception, status_code: Optional[int] = None, error_type: Optional[str] = None) -> str:
         """Convert exceptions to user-friendly error messages."""
         if status_code == 401:
             return "Authentication failed. Please check your Pollo.ai API key."
@@ -356,6 +367,8 @@ class PolloAIClient:
             return "Request timed out. The server is taking too long to respond."
         elif isinstance(exception, requests.exceptions.ConnectionError):
             return "Connection failed. Please check your internet connection."
+        elif error_type:
+            return f"{error_type}: {str(exception)}"
         else:
             return f"Request failed: {str(exception)}"
     

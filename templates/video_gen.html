@@ -942,8 +942,15 @@ async function startGenerationWithImage(imageFilename, clipCount = 1) {
         const data = await response.json();
         
         if (response.ok && data.success) {
-            const generatedCount = data.count || 1;
-            showToast(`Started generation of ${generatedCount} clip(s)`);
+            const startedCount = data.count || 0;
+            const queuedCount = data.queued_count || 0;
+            
+            if (queuedCount > 0) {
+                showToast(`Started ${startedCount} clip(s), ${queuedCount} queued due to rate limits. They will retry automatically.`);
+            } else {
+                showToast(`Started generation of ${startedCount} clip(s)`);
+            }
+            
             loadClips();
             // Start polling
             statusInterval = setInterval(loadClips, 5000);
