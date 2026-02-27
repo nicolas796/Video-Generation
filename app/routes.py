@@ -1067,14 +1067,14 @@ def generate_script_route(use_case_id):
         generator = ScriptGenerator(api_key=api_key)
         result = generator.generate_script(product_data, use_case_config)
         
-        if not result['success']:
+        if not result.get('success'):
             error_msg = result.get('error', 'Script generation failed')
             current_app.logger.error(f"Script generation failed: {error_msg}")
             return jsonify({'error': error_msg}), 500
         
         # Validate content exists
         if not result.get('content'):
-            current_app.logger.error("Script generation returned empty content")
+            current_app.logger.error("Script generation returned empty content (success=True but no content)")
             return jsonify({'error': 'Script generation returned empty content'}), 500
         
         current_app.logger.info(f"Saving script for use_case {use_case_id}, content length: {len(result['content'])}")
