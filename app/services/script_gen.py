@@ -5,6 +5,7 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+import httpx
 from openai import OpenAI
 
 from app.utils import api_retry
@@ -19,9 +20,12 @@ class ScriptGenerator:
         self.client: Optional[OpenAI] = None
         if self.api_key:
             # Use Kimi (Moonshot) API with OpenAI-compatible SDK
+            # Create httpx client without proxy to avoid environment proxy issues
+            http_client = httpx.Client(timeout=60.0, follow_redirects=True)
             self.client = OpenAI(
                 api_key=self.api_key,
-                base_url="https://api.moonshot.cn/v1"
+                base_url="https://api.moonshot.cn/v1",
+                http_client=http_client
             )
         elif not offline_fallback:
             raise ValueError("MOONSHOT_API_KEY is required when offline fallback is disabled")
@@ -54,7 +58,7 @@ class ScriptGenerator:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="moonshot-v1-8k",
+                model="kimi-k2.5",
                 temperature=0.8,
                 max_tokens=500,
             )
@@ -110,7 +114,7 @@ Provide ONLY the refined script text. No explanations."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="moonshot-v1-8k",
+                model="kimi-k2.5",
                 temperature=0.8,
                 max_tokens=500,
             )
