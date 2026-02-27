@@ -50,8 +50,10 @@ def create_app(config_name='default'):
                        app.config['FINAL_UPLOAD_FOLDER']]:
             os.makedirs(folder, exist_ok=True)
         
-        # Create default admin user if configured
-        create_default_admin()
+        # Create default admin user if configured (skip during build phase)
+        # Skip if RENDER environment variable is set but database is not ready
+        if not os.getenv('RENDER') or os.getenv('DATABASE_URL'):
+            create_default_admin()
     
     # Register blueprints
     from app.routes import main_bp

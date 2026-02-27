@@ -32,6 +32,8 @@ def load_user(user_id):
 
 def create_default_admin():
     """Create default admin user from environment variables if it doesn't exist."""
+    import sqlalchemy.exc
+    
     admin_username = os.getenv('ADMIN_USERNAME')
     admin_password = os.getenv('ADMIN_PASSWORD')
     
@@ -39,20 +41,25 @@ def create_default_admin():
     if not admin_username or not admin_password:
         return
     
-    # Check if admin already exists
-    existing = User.query.filter_by(username=admin_username).first()
-    if existing:
+    try:
+        # Check if admin already exists
+        existing = User.query.filter_by(username=admin_username).first()
+        if existing:
+            return
+        
+        # Create new admin user
+        admin = User(
+            username=admin_username,
+            is_admin=True
+        )
+        admin.set_password(admin_password)
+        db.session.add(admin)
+        db.session.commit()
+        current_app.logger.info(f'Default admin user created: {admin_username}')
+    except sqlalchemy.exc.OperationalError as e:
+        # Table doesn't exist yet (migrations haven't run)
+        current_app.logger.warning(f'Cannot create admin user - database not initialized: {e}')
         return
-    
-    # Create new admin user
-    admin = User(
-        username=admin_username,
-        is_admin=True
-    )
-    admin.set_password(admin_password)
-    db.session.add(admin)
-    db.session.commit()
-    current_app.logger.info(f'Default admin user created: {admin_username}')
 
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
