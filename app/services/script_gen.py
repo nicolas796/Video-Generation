@@ -69,8 +69,18 @@ class ScriptGenerator:
                 temperature=1.0,
                 max_tokens=500,
             )
-            script_content = response.choices[0].message.content.strip()
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Raw response type: {type(response)}")
+            logger.info(f"Raw response: {response}")
+            raw_content = response.choices[0].message.content
+            logger.info(f"Raw content: {repr(raw_content)}")
+            script_content = raw_content.strip() if raw_content else ""
             script_content = self._clean_script(script_content)
+            logger.info(f"Cleaned content: {repr(script_content)}")
+            if not script_content:
+                logger.error("Script content is empty after cleaning")
+                return {"success": False, "error": "Script generation returned empty content", "content": None, "estimated_duration": None}
             word_count = len(script_content.split())
             estimated_duration = self._estimate_duration(script_content)
             return {
@@ -80,9 +90,12 @@ class ScriptGenerator:
                 "word_count": word_count,
                 "tone": use_case_config.get("style", "conversational"),
                 "generation_prompt": user_prompt,
-                "raw_response": response.choices[0].message.content,
+                "raw_response": raw_content,
             }
         except Exception as exc:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Exception in generate_script: {type(exc).__name__}: {exc}")
             if not self.offline_fallback:
                 return {"success": False, "error": str(exc), "content": None, "estimated_duration": None}
             fallback = self._offline_script(product_data, use_case_config)
