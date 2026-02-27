@@ -579,17 +579,19 @@ def serve_upload(filename):
     upload_folder = current_app.config['UPLOAD_FOLDER']
     
     # Security: Validate filename to prevent path traversal
-    # 1. Use secure_filename to sanitize
-    safe_filename = secure_filename(filename)
-    
-    # 2. Check if the safe path is still within upload folder
-    if not is_safe_path(upload_folder, safe_filename):
-        current_app.logger.warning(f'Path traversal attempt detected: {filename}')
-        abort(403, 'Access denied')
-    
-    # 3. Additional check: ensure no '..' in path components
+    # 1. Ensure no '..' in path components
     if '..' in filename or filename.startswith('/'):
         current_app.logger.warning(f'Invalid path detected: {filename}')
+        abort(403, 'Access denied')
+    
+    # 2. Split path and sanitize each component
+    path_parts = filename.split('/')
+    safe_parts = [secure_filename(part) for part in path_parts]
+    safe_filename = '/'.join(safe_parts)
+    
+    # 3. Check if the safe path is still within upload folder
+    if not is_safe_path(upload_folder, safe_filename):
+        current_app.logger.warning(f'Path traversal attempt detected: {filename}')
         abort(403, 'Access denied')
     
     return send_from_directory(upload_folder, safe_filename)

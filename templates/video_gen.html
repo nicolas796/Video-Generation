@@ -896,7 +896,7 @@ async function startGenerationWithImage(imageFilename) {
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/generate-clips`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
             body: JSON.stringify({ selected_image: imageFilename })
         });
         
@@ -954,6 +954,7 @@ async function uploadVideo() {
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/upload-video`, {
             method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token() }}' },
             body: formData
         });
         
@@ -1012,7 +1013,7 @@ async function confirmRegenerate() {
     try {
         const response = await fetch(`/api/clips/${currentClipId}/regenerate`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
             body: JSON.stringify({ prompt: newPrompt })
         });
         
@@ -1043,7 +1044,8 @@ function openDeleteModal(clipId) {
 async function confirmDelete() {
     try {
         const response = await fetch(`/api/clips/${currentClipId}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            headers: { 'X-CSRFToken': '{{ csrf_token() }}' }
         });
         
         const data = await response.json();

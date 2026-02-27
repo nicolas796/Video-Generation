@@ -546,7 +546,7 @@ async function generateScript() {
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/script`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' }
         });
         
         const data = await response.json();
@@ -591,7 +591,7 @@ async function saveScript() {
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/script`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
             body: JSON.stringify({ content: newContent })
         });
         
@@ -625,7 +625,7 @@ async function regenerateWithRefinement() {
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/script/regenerate`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
             body: JSON.stringify({ refinement: refinement })
         });
         
@@ -655,7 +655,8 @@ function deleteScript() {
 async function confirmDelete() {
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/script`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            headers: { 'X-CSRFToken': '{{ csrf_token() }}' }
         });
         
         if (response.ok) {
@@ -680,7 +681,8 @@ function approveScript() {
 async function confirmApprove() {
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/script/approve`, {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'X-CSRFToken': '{{ csrf_token() }}' }
         });
         
         const data = await response.json();

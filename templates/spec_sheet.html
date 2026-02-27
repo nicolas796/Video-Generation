@@ -625,7 +625,8 @@
             const response = await fetch(`/api/products/${productId}`, {
                 method: 'PUT',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token() }}'
                 },
                 body: JSON.stringify(data)
             });
@@ -652,7 +653,8 @@
         
         try {
             const response = await fetch(`/api/products/${productId}/download-images`, {
-                method: 'POST'
+                method: 'POST',
+                headers: { 'X-CSRFToken': '{{ csrf_token() }}' }
             });
             
             const result = await response.json();
