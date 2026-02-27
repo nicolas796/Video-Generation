@@ -1331,6 +1331,7 @@ def get_product_images(product_id):
     product_folder = os.path.join(upload_folder, 'products', str(product_id))
     images = []
     
+    # First try local images
     if os.path.exists(product_folder):
         for filename in sorted(os.listdir(product_folder)):
             if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
@@ -1338,6 +1339,14 @@ def get_product_images(product_id):
                     'filename': filename,
                     'url': f"/uploads/products/{product_id}/{filename}"
                 })
+    
+    # If no local images, fall back to remote URLs stored in product.images
+    if not images and product.images:
+        for i, img_url in enumerate(product.images[:10]):
+            images.append({
+                'filename': f"remote_image_{i+1:02d}.jpg",
+                'url': img_url
+            })
     
     return jsonify({
         'success': True,
