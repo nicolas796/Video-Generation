@@ -1072,6 +1072,13 @@ def generate_script_route(use_case_id):
             current_app.logger.error(f"Script generation failed: {error_msg}")
             return jsonify({'error': error_msg}), 500
         
+        # Validate content exists
+        if not result.get('content'):
+            current_app.logger.error("Script generation returned empty content")
+            return jsonify({'error': 'Script generation returned empty content'}), 500
+        
+        current_app.logger.info(f"Saving script for use_case {use_case_id}, content length: {len(result['content'])}")
+        
         # Save or update script
         if existing_script:
             existing_script.content = result['content']
@@ -1092,12 +1099,14 @@ def generate_script_route(use_case_id):
             )
             db.session.add(script)
             db.session.commit()
+            current_app.logger.info(f"Created new script with id: {script.id}")
         
         # Update use case status
         if use_case.status == 'configured':
             use_case.status = 'generating'
             db.session.commit()
         
+        current_app.logger.info(f"Script saved successfully for use_case {use_case_id}")
         return jsonify({
             'success': True,
             'script': script.to_dict(),
