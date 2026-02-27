@@ -175,13 +175,17 @@ class VideoClipManager:
         product: Product,
         script_content: str
     ) -> str:
-        """Build a video generation prompt for a specific clip type."""
+        """Build a video generation prompt for a specific clip type.
+        
+        Uses the actual script content and product details to create contextual prompts.
+        """
         
         style = use_case.style or 'realistic'
-        # Clean product name - use generic terms to avoid content filters
-        # Some product names trigger AI safety filters (cosmetics, medical terms, etc.)
-        # Use completely generic term to avoid Pixverse content filter
-        product_name = 'Premium Item'
+        product_name = product.name or 'Product'
+        product_desc = product.description or ''
+        
+        # Extract relevant script segment for this clip
+        script_segment = self._extract_script_segment(script_content, clip_type, clip_index, total_clips)
         
         # Style descriptors
         style_descriptors = {
@@ -193,23 +197,16 @@ class VideoClipManager:
         
         style_desc = style_descriptors.get(style, style_descriptors['realistic'])
         
-        # Build prompt based on clip type - use generic descriptions to avoid content filters
+        # Build contextual prompt based on clip type AND script content
         prompts = {
-            'hook': f"Eye-catching opening scene with a {product_name}, {style_desc}, dynamic camera movement, engaging visual that grabs attention, item in focus",
-            
-            'problem': f"Scene showing a relatable situation, emotional connection, everyday scenario, {style_desc}, storytelling approach",
-            
-            'solution': f"Beautiful demonstration of an item being used, highlighting features, elegant presentation, {style_desc}, smooth camera movement",
-            
-            'product_showcase': f"Stunning product highlight, multiple angles, premium quality, {style_desc}, professional studio lighting, elegant display",
-            
-            'product_demo': f"Step by step demonstration, showing functionality in use, hands interacting, {style_desc}, clear visibility",
-            
-            'benefits': f"Lifestyle scene showing satisfaction, happy person enjoying results, aspirational setting, {style_desc}, warm atmosphere",
-            
-            'social_proof': f"Scene suggesting happy customers, group of people, positive atmosphere, {style_desc}, community feeling",
-            
-            'cta': f"Strong closing scene with clear view, memorable final image, {style_desc}, item front and center"
+            'hook': self._build_hook_prompt(product_name, product_desc, script_segment, style_desc),
+            'problem': self._build_problem_prompt(product_name, product_desc, script_segment, style_desc),
+            'solution': self._build_solution_prompt(product_name, product_desc, script_segment, style_desc),
+            'product_showcase': self._build_showcase_prompt(product_name, product_desc, script_segment, style_desc),
+            'product_demo': self._build_demo_prompt(product_name, product_desc, script_segment, style_desc),
+            'benefits': self._build_benefits_prompt(product_name, product_desc, script_segment, style_desc),
+            'social_proof': self._build_social_proof_prompt(product_name, product_desc, script_segment, style_desc),
+            'cta': self._build_cta_prompt(product_name, product_desc, script_segment, style_desc)
         }
         
         base_prompt = prompts.get(clip_type, prompts['product_showcase'])
@@ -224,7 +221,75 @@ class VideoClipManager:
         
         format_desc = format_guidance.get(use_case.format, format_guidance['9:16'])
         
-        return f"{base_prompt}, {format_desc}, smooth professional camera work, high production value"
+        final_prompt = f"{base_prompt}, {format_desc}, smooth professional camera work, high production value"
+        
+        self._log_info(f"Generated {clip_type} prompt for {product_name}", 
+                      clip_index=clip_index, 
+                      script_segment_preview=script_segment[:50] if script_segment else 'None')
+        
+        return final_prompt
+    
+    def _extract_script_segment(self, script_content: str, clip_type: str, clip_index: int, total_clips: int) -> str:
+        """Extract the relevant portion of the script for this clip type."""
+        if not script_content:
+            return ""
+        
+        sentences = [s.strip() for s in script_content.replace('!', '.').replace('?', '.').split('.') if s.strip()]
+        if not sentences:
+            return script_content[:100]
+        
+        # Map clip position to script portion
+        if total_clips == 1:
+            return script_content
+        
+        # Distribute sentences across clips
+        sentences_per_clip = max(1, len(sentences) // total_clips)
+        start_idx = clip_index * sentences_per_clip
+        end_idx = min(start_idx + sentences_per_clip + 1, len(sentences))
+        
+        segment = '. '.join(sentences[start_idx:end_idx])
+        return segment if segment else script_content[:100]
+    
+    def _build_hook_prompt(self, product_name: str, product_desc: str, script_segment: str, style_desc: str) -> str:
+        """Build hook clip prompt with script context."""
+        context = f" related to: {script_segment}" if script_segment else ""
+        return f"Eye-catching opening shot featuring {product_name}{context}. Dynamic camera movement, engaging visual that immediately grabs attention. The {product_name} prominently featured or implied. {style_desc}"
+    
+    def _build_problem_prompt(self, product_name: str, product_desc: str, script_segment: str, style_desc: str) -> str:
+        """Build problem clip prompt with script context."""
+        context = f" showing: {script_segment}" if script_segment else ""
+        return f"Scene establishing the problem or pain point{context}. Relatable situation showing the 'before' state. Emotional connection to the struggle. {style_desc}, storytelling approach"
+    
+    def _build_solution_prompt(self, product_name: str, product_desc: str, script_segment: str, style_desc: str) -> str:
+        """Build solution clip prompt with script context."""
+        context = f" demonstrating: {script_segment}" if script_segment else ""
+        product_context = f" About {product_name}: {product_desc[:100]}" if product_desc else ""
+        return f"Beautiful demonstration of {product_name} solving the problem{context}.{product_context} The transformation moment. Elegant presentation, smooth camera movement. {style_desc}"
+    
+    def _build_showcase_prompt(self, product_name: str, product_desc: str, script_segment: str, style_desc: str) -> str:
+        """Build product showcase prompt with script context."""
+        context = f" while showing: {script_segment}" if script_segment else ""
+        return f"Stunning highlight of {product_name}{context}. Multiple angles showing the product's best features. Premium quality, professional studio lighting. {product_name} looking elegant and desirable. {style_desc}"
+    
+    def _build_demo_prompt(self, product_name: str, product_desc: str, script_segment: str, style_desc: str) -> str:
+        """Build demo clip prompt with script context."""
+        context = f" demonstrating: {script_segment}" if script_segment else ""
+        return f"Step by step demonstration of {product_name} in action{context}. Hands interacting with the product, showing how it works. Clear visibility of the functionality. {style_desc}"
+    
+    def _build_benefits_prompt(self, product_name: str, product_desc: str, script_segment: str, style_desc: str) -> str:
+        """Build benefits clip prompt with script context."""
+        context = f" showing: {script_segment}" if script_segment else ""
+        return f"Lifestyle scene showing the satisfaction from using {product_name}{context}. Happy person enjoying the results, aspirational setting. The 'after' state. Warm atmosphere. {style_desc}"
+    
+    def _build_social_proof_prompt(self, product_name: str, product_desc: str, script_segment: str, style_desc: str) -> str:
+        """Build social proof clip prompt with script context."""
+        context = f" related to: {script_segment}" if script_segment else ""
+        return f"Scene suggesting people enjoying {product_name}{context}. Positive atmosphere, community feeling. Visual social validation. {style_desc}"
+    
+    def _build_cta_prompt(self, product_name: str, product_desc: str, script_segment: str, style_desc: str) -> str:
+        """Build CTA clip prompt with script context."""
+        context = f" emphasizing: {script_segment}" if script_segment else ""
+        return f"Strong closing scene with {product_name} front and center{context}. Memorable final image, clear view of the product. Call-to-action energy, urgency. {style_desc}"
     
     def create_clip(
         self,
