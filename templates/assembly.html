@@ -267,7 +267,7 @@ function openClipModal(clipId) {
 async function analyzeClips() {
     if (!clipsData.length) return; toggleButtonLoading('analyzeBtn', true, 'Analyzing...'); document.getElementById('analysisProgress').classList.remove('d-none'); updateAnalysisProgress(0, clipsData.length);
     try {
-        const response = await fetch(`/api/use-cases/${useCaseId}/analyze-clips`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }), data = await response.json();
+        const response = await fetch(`/api/use-cases/${useCaseId}/analyze-clips`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' }, body: JSON.stringify({}) }), data = await response.json();
         if (!data.success) throw new Error(data.error || 'Analysis failed'); updateAnalysisProgress(data.analyzed || 0, data.total || clipsData.length); await loadAssemblyData();
     } catch (error) { alert(error.message); } finally { document.getElementById('analysisProgress').classList.add('d-none'); toggleButtonLoading('analyzeBtn', false); updateButtons(); }
 }
@@ -277,7 +277,7 @@ function updateAnalysisProgress(done, total) { document.getElementById('analysis
 async function optimizeSequence() {
     if (!clipsData.length) return; toggleButtonLoading('optimizeBtn', true, 'Optimizing...');
     try {
-        const response = await fetch(`/api/use-cases/${useCaseId}/optimize-sequence`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }), data = await response.json();
+        const response = await fetch(`/api/use-cases/${useCaseId}/optimize-sequence`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' }, body: JSON.stringify({}) }), data = await response.json();
         if (!data.success) throw new Error(data.error || 'Unable to optimize'); pendingOptimization = data; renderOptimizationBanner(data, 'preview');
     } catch (error) { alert(error.message); } finally { toggleButtonLoading('optimizeBtn', false); updateButtons(); }
 }
@@ -285,7 +285,7 @@ async function optimizeSequence() {
 async function autoOrderClips() {
     if (!clipsData.length) return; toggleButtonLoading('autoOrderBtn', true, 'Auto-ordering...');
     try {
-        const response = await fetch(`/api/use-cases/${useCaseId}/auto-order`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) }), data = await response.json();
+        const response = await fetch(`/api/use-cases/${useCaseId}/auto-order`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' }, body: JSON.stringify({}) }), data = await response.json();
         if (!data.success) throw new Error(data.error || 'Auto-order failed'); pendingOptimization = null;
         if (data.recommendation) renderOptimizationBanner(data.recommendation, 'auto'); await loadAssemblyData();
     } catch (error) { alert(error.message); } finally { toggleButtonLoading('autoOrderBtn', false); updateButtons(); }
@@ -318,7 +318,7 @@ function renderFinalVideo() { new bootstrap.Modal(document.getElementById('rende
 async function startRender() {
     const modalBtn = document.querySelector('#renderModal .btn-success'); if (modalBtn) modalBtn.disabled = true; toggleButtonLoading('renderBtn', true, 'Rendering…');
     try {
-        const response = await fetch(`/api/use-cases/${useCaseId}/assemble`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quality: document.getElementById('renderQuality').value, transition: document.getElementById('renderTransitions').value, include_voiceover: document.getElementById('includeVoiceover').checked, transition_duration: document.getElementById('renderTransitions').value === 'cut' ? 0.1 : 0.5 }) });
+        const response = await fetch(`/api/use-cases/${useCaseId}/assemble`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' }, body: JSON.stringify({ quality: document.getElementById('renderQuality').value, transition: document.getElementById('renderTransitions').value, include_voiceover: document.getElementById('includeVoiceover').checked, transition_duration: document.getElementById('renderTransitions').value === 'cut' ? 0.1 : 0.5 }) });
         const data = await response.json(); if (!response.ok || !data.success) throw new Error(data.error || 'Rendering failed');
         bootstrap.Modal.getInstance(document.getElementById('renderModal')).hide(); alert('Final video ready! Redirecting to output page.'); window.location.href = `/output/${useCaseId}`;
     } catch (error) { alert(error.message || 'Unable to complete render'); } finally { toggleButtonLoading('renderBtn', false); if (modalBtn) modalBtn.disabled = false; }

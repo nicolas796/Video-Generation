@@ -626,7 +626,7 @@ function editUseCase(useCaseId) {
 
 async function duplicateUseCase(useCaseId) {
     try {
-        const response = await fetch(`/api/use-cases/${useCaseId}/duplicate`, { method: 'POST' });
+        const response = await fetch(`/api/use-cases/${useCaseId}/duplicate`, { method: 'POST', headers: { 'X-CSRFToken': '{{ csrf_token() }}' } });
         if (response.ok) {
             loadUseCases();
         } else {
