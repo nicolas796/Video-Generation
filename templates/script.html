@@ -540,7 +540,12 @@ function showScript(script) {
 }
 
 async function generateScript() {
-    document.getElementById('generateBtn').disabled = true;
+    // Handle both buttons (initial generate and regenerate)
+    const generateBtn = document.getElementById('generateBtn');
+    const generateNewBtn = document.getElementById('generateNewBtn');
+    
+    if (generateBtn) generateBtn.disabled = true;
+    if (generateNewBtn) generateNewBtn.disabled = true;
     document.getElementById('generateLoading').classList.remove('d-none');
     
     try {
@@ -561,7 +566,8 @@ async function generateScript() {
         console.error('Error:', error);
         alert('Failed to generate script. Please try again.');
     } finally {
-        document.getElementById('generateBtn').disabled = false;
+        if (generateBtn) generateBtn.disabled = false;
+        if (generateNewBtn) generateNewBtn.disabled = false;
         document.getElementById('generateLoading').classList.add('d-none');
     }
 }
