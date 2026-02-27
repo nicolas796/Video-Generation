@@ -1798,8 +1798,6 @@ def auto_order_clips(use_case_id):
 
 @main_bp.route('/api/use-cases/<int:use_case_id>/assembly', methods=['GET'])
 @login_required
-@main_bp.route('/api/use-cases/<int:use_case_id>/assembly-data', methods=['GET'])
-@login_required
 def get_assembly_data(use_case_id):
     """Get all data needed for assembly UI."""
     use_case = UseCase.query.get_or_404(use_case_id)
