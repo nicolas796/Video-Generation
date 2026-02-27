@@ -58,7 +58,7 @@ class ScriptGenerator:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="kimi-k2.5",
+                model="kimi-k2-5",
                 temperature=0.8,
                 max_tokens=500,
             )
@@ -114,7 +114,7 @@ Provide ONLY the refined script text. No explanations."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="kimi-k2.5",
+                model="kimi-k2-5",
                 temperature=0.8,
                 max_tokens=500,
             )
