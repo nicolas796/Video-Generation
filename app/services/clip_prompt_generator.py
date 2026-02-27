@@ -159,18 +159,36 @@ class ClipPromptGenerator:
         return segments
     
     def _select_image_for_clip(self, product_images: List[str], clip_type: str, clip_index: int) -> Optional[str]:
-        """Select the most appropriate product image for a clip."""
+        """Select the most appropriate product image for a clip.
+        
+        Args:
+            product_images: List of image URLs (can be local paths or public URLs)
+            clip_type: Type of clip (hook, problem, solution, cta, etc.)
+            clip_index: Index of the clip in the sequence
+            
+        Returns:
+            Selected image URL or path
+        """
         if not product_images:
             return None
         
-        # For now, use a simple rotation strategy
-        # Future: Could use image analysis to select best match
-        if clip_type == 'hook' and len(product_images) > 1:
-            return product_images[0]  # First image often best for hook
-        elif clip_type == 'cta' and len(product_images) > 1:
-            return product_images[-1]  # Last image often best for CTA
+        # Filter to prefer public URLs (http/https) for GPT-4o Vision
+        # Public URLs work better for image analysis than local paths
+        public_urls = [img for img in product_images if img.startswith(('http://', 'https://'))]
+        
+        # Use public URLs if available, otherwise fall back to all images
+        images_to_use = public_urls if public_urls else product_images
+        
+        if not images_to_use:
+            return None
+        
+        # Select based on clip type and index
+        if clip_type == 'hook' and len(images_to_use) > 1:
+            return images_to_use[0]  # First image often best for hook
+        elif clip_type == 'cta' and len(images_to_use) > 1:
+            return images_to_use[-1]  # Last image often best for CTA
         else:
-            return product_images[clip_index % len(product_images)]
+            return images_to_use[clip_index % len(images_to_use)]
     
     def _encode_image(self, image_path: str) -> Optional[str]:
         """Encode an image to base64 for GPT-4o Vision."""

@@ -150,26 +150,36 @@ class VideoClipManager:
             return self._generate_template_prompts(use_case, script_content, product, num_clips)
     
     def _get_product_images(self, product: Product) -> List[str]:
-        """Get list of product image paths."""
+        """Get list of product image URLs/paths.
+        
+        Prioritizes original public URLs (from scraping) over local paths,
+        since public URLs work with Pollo.ai for image-to-video generation.
+        """
         images = []
         
-        # Check if product has images in the database
+        # First, use the original public URLs from the database (from scraping)
+        # These are URLs like https://cdn.shopify.com/... that Pollo.ai can access
         if product.images:
             if isinstance(product.images, list):
                 images.extend(product.images)
             elif isinstance(product.images, dict):
                 images.extend(product.images.values())
         
-        # Also check the product upload folder
+        # Filter to only include public URLs (http/https) for Pollo.ai
+        # Local file paths won't work with Pollo's image-to-video API
+        public_urls = [img for img in images if img.startswith(('http://', 'https://'))]
+        
+        if public_urls:
+            return public_urls
+        
+        # If no public URLs, fall back to local paths (for GPT-4o Vision analysis only)
+        # These won't work with Pollo.ai but can still be used for prompt generation
         product_folder = os.path.join(self.upload_folder, 'products', str(product.id))
         if os.path.exists(product_folder):
             folder_images = [f"products/{product.id}/{f}" 
                            for f in os.listdir(product_folder)
                            if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
-            # Add any found images not already in the list
-            for img in folder_images:
-                if img not in images:
-                    images.append(img)
+            images.extend(folder_images)
         
         return images
     
@@ -426,20 +436,19 @@ class VideoClipManager:
             clip.error_message = None
             db.session.commit()
             
-            # If no image_url provided, try to find a product image
+            # If no image_url provided, use the original public URLs from the product
+            # These are the publicly accessible URLs from the original source (e.g., Shopify CDN)
             if not image_url:
                 product = Product.query.get(use_case.product_id)
-                if product:
-                    product_folder = os.path.join(self.upload_folder, 'products', str(product.id))
-                    if os.path.exists(product_folder):
-                        images = [f for f in os.listdir(product_folder) 
-                                if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
-                        if images:
-                            # Use the first image found
-                            image_path = f"products/{product.id}/{images[0]}"
-                            image_url = f"{self.upload_folder}/{image_path}"
-                            self._log_info('Using product image for image-to-video', 
-                                         clip_id=clip.id, image_path=image_path)
+                if product and product.images:
+                    # product.images contains the original public URLs from scraping
+                    if isinstance(product.images, list) and len(product.images) > 0:
+                        # Select image based on clip sequence order for variety
+                        image_index = clip.sequence_order % len(product.images)
+                        image_url = product.images[image_index]
+                        self._log_info('Using public product image URL for image-to-video', 
+                                     clip_id=clip.id, 
+                                     image_url=image_url[:100] + '...' if len(image_url) > 100 else image_url)
             
             # Create the video generation job
             webhook_url = self._build_webhook_url()
