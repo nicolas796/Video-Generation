@@ -545,7 +545,7 @@ async function generateVoicePreview() {
     try {
         const response = await fetch('/api/voices/preview', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
             body: JSON.stringify({ voice_id: voiceId, text: text, voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.0, use_speaker_boost: true }})
         });
         const result = await response.json();
