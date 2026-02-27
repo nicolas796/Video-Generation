@@ -472,14 +472,17 @@
                     <i class="bi bi-camera-video"></i>
                 </div>
                 <h5>Ready to Create Videos</h5>
-                <p class="text-muted mb-4">Generate AI-powered clips or upload your own videos.</p>
-                <div class="d-flex gap-2 justify-content-center">
+                <p class="text-muted mb-4">Generate AI-powered clips, upload your own, or reuse clips from the library.</p>
+                <div class="d-flex gap-2 justify-content-center flex-wrap">
                     <button class="btn btn-generate" onclick="startGeneration()">
                         <i class="bi bi-magic me-2"></i>Generate Clip
                     </button>
                     <button class="btn btn-outline-success" onclick="openUploadModal()">
                         <i class="bi bi-upload me-2"></i>Upload Video
                     </button>
+                    <a class="btn btn-outline-info" href="/library?use_case_id={{ use_case.id }}">
+                        <i class="bi bi-collection-play me-2"></i>Browse Library
+                    </a>
                 </div>
             </div>
             
@@ -792,6 +795,9 @@ function renderClipCard(clip) {
                         <button class="btn btn-outline-light btn-sm" onclick="openRegenerateModal(${clip.id})">
                             <i class="bi bi-arrow-repeat"></i>
                         </button>
+                        <button class="btn btn-success btn-sm" onclick="addClipToLibrary(${clip.id})" title="Add to Library">
+                            <i class="bi bi-collection-play"></i>
+                        </button>
                         ` : ''}
                         <button class="btn btn-outline-danger btn-sm" onclick="openDeleteModal(${clip.id})">
                             <i class="bi bi-trash"></i>
@@ -954,17 +960,19 @@ async function startGenerationWithImage(imageFilename, clipCount = 1) {
     }
 }
 
-function showToast(message) {
-    // Create toast element
+function showToast(message, type = 'success') {
+    const bgClass = type === 'success' ? 'bg-success' : type === 'error' ? 'bg-danger' : 'bg-info';
+    const iconClass = type === 'success' ? 'bi-check-circle' : type === 'error' ? 'bi-exclamation-circle' : 'bi-info-circle';
+    
     const toastContainer = document.createElement('div');
     toastContainer.className = 'toast-container position-fixed top-0 end-0 p-3';
     toastContainer.style.zIndex = '1055';
     
     toastContainer.innerHTML = `
-        <div class="toast align-items-center text-white bg-success border-0" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast align-items-center text-white ${bgClass} border-0" role="alert" aria-live="assertive" aria-atomic="true">
             <div class="d-flex">
                 <div class="toast-body">
-                    <i class="bi bi-check-circle me-2"></i>${message}
+                    <i class="bi ${iconClass} me-2"></i>${message}
                 </div>
                 <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
             </div>
@@ -975,10 +983,32 @@ function showToast(message) {
     const toast = new bootstrap.Toast(toastContainer.querySelector('.toast'));
     toast.show();
     
-    // Remove after hidden
     toastContainer.querySelector('.toast').addEventListener('hidden.bs.toast', () => {
         toastContainer.remove();
     });
+}
+
+async function addClipToLibrary(clipId) {
+    try {
+        const response = await fetch('/api/library/clips', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+            body: JSON.stringify({ clip_id: clipId })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            showToast('Clip added to library!');
+        } else if (response.status === 409) {
+            showToast('Clip is already in the library', 'info');
+        } else {
+            showToast('Error: ' + (data.error || 'Failed to add clip'), 'error');
+        }
+    } catch (error) {
+        console.error('Error adding clip to library:', error);
+        showToast('Failed to add clip to library', 'error');
+    }
 }
 
 // Upload video functions

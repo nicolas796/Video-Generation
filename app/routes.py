@@ -10,7 +10,7 @@ import requests
 from flask import Blueprint, render_template, jsonify, request, current_app, send_from_directory, url_for, abort
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
-from app.models import Product, UseCase, Script, VideoClip, FinalVideo
+from app.models import Product, UseCase, Script, VideoClip, FinalVideo, ClipLibrary, UseCaseLibraryClip
 from app import db
 from app.scrapers import scrape_product
 from app.services.script_gen import ScriptGenerator
@@ -773,6 +773,21 @@ def use_case_page(product_id):
     """Use case configuration UI page."""
     product = Product.query.get_or_404(product_id)
     return render_template('use_case.html', product=product)
+
+
+@main_bp.route('/api/use-cases', methods=['GET'])
+@login_required
+def get_all_use_cases():
+    """Get all use cases (optionally filtered by product)."""
+    product_id = request.args.get('product_id', type=int)
+    query = UseCase.query
+    if product_id:
+        query = query.filter_by(product_id=product_id)
+    use_cases = query.order_by(UseCase.created_at.desc()).all()
+    return jsonify({
+        'success': True,
+        'use_cases': [uc.to_dict() for uc in use_cases]
+    })
 
 
 @main_bp.route('/api/products/<int:product_id>/use-cases', methods=['GET'])
@@ -2337,3 +2352,358 @@ def retry_failed_clips(use_case_id):
             'error': f'Failed to retry clips: {str(e)}',
             'error_type': 'retry_failed'
         }), 500
+
+
+# ============================================================================
+# Clip Library Routes
+# ============================================================================
+
+@main_bp.route('/library')
+@login_required
+def library_page():
+    """Render the clip library page."""
+    return render_template('library.html')
+
+
+@main_bp.route('/api/library/clips', methods=['GET'])
+@login_required
+def get_library_clips():
+    """Get all clips from the library with optional filtering."""
+    try:
+        # Get filter parameters
+        content_type = request.args.get('content_type')
+        style = request.args.get('style')
+        format_filter = request.args.get('format')
+        search = request.args.get('search')
+        favorites_only = request.args.get('favorites', 'false').lower() == 'true'
+        sort_by = request.args.get('sort', 'added_to_library_at')  # rating, usage_count, added_to_library_at
+        sort_order = request.args.get('order', 'desc')
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 24))
+        
+        # Build query
+        query = ClipLibrary.query.filter_by(status='active')
+        
+        if content_type:
+            query = query.filter_by(content_type=content_type)
+        
+        if style:
+            query = query.filter_by(style=style)
+        
+        if format_filter:
+            query = query.filter_by(format=format_filter)
+        
+        if favorites_only:
+            query = query.filter_by(is_favorite=True)
+        
+        if search:
+            search_term = f"%{search}%"
+            query = query.filter(
+                db.or_(
+                    ClipLibrary.name.ilike(search_term),
+                    ClipLibrary.description.ilike(search_term),
+                    ClipLibrary.tags.contains([search])
+                )
+            )
+        
+        # Apply sorting
+        sort_column = getattr(ClipLibrary, sort_by, ClipLibrary.added_to_library_at)
+        if sort_order == 'desc':
+            query = query.order_by(sort_column.desc())
+        else:
+            query = query.order_by(sort_column.asc())
+        
+        # Paginate
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        clips = pagination.items
+        
+        return jsonify({
+            'success': True,
+            'clips': [clip.to_dict() for clip in clips],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': pagination.total,
+                'pages': pagination.pages,
+                'has_next': pagination.has_next,
+                'has_prev': pagination.has_prev
+            }
+        })
+        
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"Library clips error: {e}\n{traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/library/clips/<int:clip_id>', methods=['GET'])
+@login_required
+def get_library_clip(clip_id):
+    """Get a single library clip by ID."""
+    try:
+        clip = ClipLibrary.query.get_or_404(clip_id)
+        return jsonify({
+            'success': True,
+            'clip': clip.to_dict()
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/library/clips', methods=['POST'])
+@login_required
+def add_to_library():
+    """Add a video clip to the library."""
+    try:
+        data = request.get_json() or {}
+        
+        # Required: clip_id or manual entry
+        clip_id = data.get('clip_id')
+        
+        if clip_id:
+            # Add existing clip to library
+            clip = VideoClip.query.get_or_404(clip_id)
+            use_case = UseCase.query.get(clip.use_case_id)
+            product = Product.query.get(use_case.product_id) if use_case else None
+            
+            # Check if already in library
+            existing = ClipLibrary.query.filter_by(original_clip_id=clip_id).first()
+            if existing:
+                return jsonify({
+                    'success': False,
+                    'error': 'Clip is already in the library',
+                    'library_clip_id': existing.id
+                }), 409
+            
+            library_clip = ClipLibrary(
+                original_clip_id=clip.id,
+                original_product_id=product.id if product else None,
+                original_use_case_id=use_case.id if use_case else None,
+                file_path=clip.file_path,
+                thumbnail_path=clip.thumbnail_path,
+                name=data.get('name') or f"Clip from {product.name if product else 'Unknown'}",
+                description=data.get('description') or clip.content_description,
+                content_type=clip.infer_content_type() or data.get('content_type'),
+                style=use_case.style if use_case else data.get('style'),
+                format=use_case.format if use_case else data.get('format'),
+                duration=clip.duration,
+                tags=data.get('tags') or clip.tags,
+                prompt=clip.prompt,
+                model_used=clip.model_used
+            )
+        else:
+            # Manual entry (for uploaded videos)
+            library_clip = ClipLibrary(
+                file_path=data.get('file_path'),
+                thumbnail_path=data.get('thumbnail_path'),
+                name=data.get('name'),
+                description=data.get('description'),
+                content_type=data.get('content_type'),
+                style=data.get('style'),
+                format=data.get('format'),
+                duration=data.get('duration'),
+                tags=data.get('tags', []),
+                prompt=data.get('prompt'),
+                model_used=data.get('model_used')
+            )
+        
+        db.session.add(library_clip)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'clip': library_clip.to_dict(),
+            'message': 'Clip added to library successfully'
+        })
+        
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"Add to library error: {e}\n{traceback.format_exc()}")
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/library/clips/<int:clip_id>', methods=['PUT'])
+@login_required
+def update_library_clip(clip_id):
+    """Update a library clip's metadata."""
+    try:
+        clip = ClipLibrary.query.get_or_404(clip_id)
+        data = request.get_json() or {}
+        
+        # Update allowed fields
+        if 'name' in data:
+            clip.name = data['name']
+        if 'description' in data:
+            clip.description = data['description']
+        if 'content_type' in data:
+            clip.content_type = data['content_type']
+        if 'style' in data:
+            clip.style = data['style']
+        if 'tags' in data:
+            clip.tags = data['tags']
+        if 'rating' in data:
+            clip.rating = max(0, min(5, int(data['rating'])))
+        if 'is_favorite' in data:
+            clip.is_favorite = bool(data['is_favorite'])
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'clip': clip.to_dict(),
+            'message': 'Clip updated successfully'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/library/clips/<int:clip_id>', methods=['DELETE'])
+@login_required
+def delete_library_clip(clip_id):
+    """Remove a clip from the library (soft delete by archiving)."""
+    try:
+        clip = ClipLibrary.query.get_or_404(clip_id)
+        clip.status = 'archived'
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Clip archived successfully'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/use-cases/<int:use_case_id>/library-clips', methods=['GET'])
+@login_required
+def get_use_case_library_clips(use_case_id):
+    """Get library clips associated with a use case."""
+    try:
+        use_case = UseCase.query.get_or_404(use_case_id)
+        links = UseCaseLibraryClip.query.filter_by(use_case_id=use_case_id).order_by(UseCaseLibraryClip.sequence_order).all()
+        
+        return jsonify({
+            'success': True,
+            'use_case_id': use_case_id,
+            'clips': [{
+                'link_id': link.id,
+                'sequence_order': link.sequence_order,
+                'added_at': link.added_at.isoformat() if link.added_at else None,
+                'clip': link.library_clip.to_dict()
+            } for link in links]
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/use-cases/<int:use_case_id>/library-clips', methods=['POST'])
+@login_required
+def add_library_clip_to_use_case(use_case_id):
+    """Add a library clip to a use case."""
+    try:
+        data = request.get_json() or {}
+        library_clip_id = data.get('library_clip_id')
+        sequence_order = data.get('sequence_order')
+        
+        if not library_clip_id:
+            return jsonify({'success': False, 'error': 'library_clip_id is required'}), 400
+        
+        use_case = UseCase.query.get_or_404(use_case_id)
+        library_clip = ClipLibrary.query.get_or_404(library_clip_id)
+        
+        # If sequence_order not provided, add to end
+        if sequence_order is None:
+            existing_count = UseCaseLibraryClip.query.filter_by(use_case_id=use_case_id).count()
+            sequence_order = existing_count
+        
+        # Create link
+        link = UseCaseLibraryClip(
+            use_case_id=use_case_id,
+            library_clip_id=library_clip_id,
+            sequence_order=sequence_order
+        )
+        
+        db.session.add(link)
+        
+        # Increment usage count
+        library_clip.usage_count += 1
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'link': {
+                'id': link.id,
+                'sequence_order': link.sequence_order,
+                'clip': library_clip.to_dict()
+            },
+            'message': 'Clip added to use case'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/use-cases/<int:use_case_id>/library-clips/<int:link_id>', methods=['DELETE'])
+@login_required
+def remove_library_clip_from_use_case(use_case_id, link_id):
+    """Remove a library clip from a use case."""
+    try:
+        link = UseCaseLibraryClip.query.filter_by(id=link_id, use_case_id=use_case_id).first_or_404()
+        
+        # Decrement usage count
+        if link.library_clip:
+            link.library_clip.usage_count = max(0, link.library_clip.usage_count - 1)
+        
+        db.session.delete(link)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Clip removed from use case'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/library/stats', methods=['GET'])
+@login_required
+def get_library_stats():
+    """Get statistics about the clip library."""
+    try:
+        total_clips = ClipLibrary.query.filter_by(status='active').count()
+        favorites = ClipLibrary.query.filter_by(status='active', is_favorite=True).count()
+        
+        # Count by content type
+        content_types = db.session.query(
+            ClipLibrary.content_type,
+            db.func.count(ClipLibrary.id)
+        ).filter_by(status='active').group_by(ClipLibrary.content_type).all()
+        
+        # Count by style
+        styles = db.session.query(
+            ClipLibrary.style,
+            db.func.count(ClipLibrary.id)
+        ).filter_by(status='active').group_by(ClipLibrary.style).all()
+        
+        return jsonify({
+            'success': True,
+            'stats': {
+                'total_clips': total_clips,
+                'favorites': favorites,
+                'content_types': {ct: count for ct, count in content_types if ct},
+                'styles': {style: count for style, count in styles if style}
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500

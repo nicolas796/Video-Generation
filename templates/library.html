@@ -1,0 +1,782 @@
+{% extends "base.html" %}
+
+{% block title %}Clip Library - Product Video Generator{% endblock %}
+
+{% block extra_css %}
+<style>
+    .library-header {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        color: white;
+        padding: 2rem 0;
+        margin-bottom: 2rem;
+    }
+    
+    .stats-card {
+        background: rgba(255,255,255,0.05);
+        border-radius: 12px;
+        padding: 1rem;
+        text-align: center;
+    }
+    
+    .stats-number {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #0d6efd;
+    }
+    
+    .stats-label {
+        font-size: 0.875rem;
+        color: rgba(255,255,255,0.7);
+    }
+    
+    .filter-section {
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    
+    .clip-card {
+        background: white;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        transition: transform 0.2s, box-shadow 0.2s;
+        cursor: pointer;
+    }
+    
+    .clip-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+    }
+    
+    .clip-thumbnail {
+        aspect-ratio: 9/16;
+        background: #f8f9fa;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .clip-thumbnail img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    
+    .clip-thumbnail .no-image {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: #6c757d;
+    }
+    
+    .clip-duration {
+        position: absolute;
+        bottom: 8px;
+        right: 8px;
+        background: rgba(0,0,0,0.7);
+        color: white;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+    
+    .clip-favorite {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: rgba(255,255,255,0.9);
+        border: none;
+        border-radius: 50%;
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+    
+    .clip-favorite:hover {
+        background: white;
+        transform: scale(1.1);
+    }
+    
+    .clip-favorite.active {
+        color: #ffc107;
+    }
+    
+    .clip-content {
+        padding: 1rem;
+    }
+    
+    .clip-title {
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    
+    .clip-meta {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.5rem;
+    }
+    
+    .clip-tag {
+        font-size: 0.75rem;
+        padding: 2px 8px;
+        border-radius: 12px;
+        background: #e9ecef;
+        color: #495057;
+    }
+    
+    .clip-tag.style-realistic { background: #d1ecf1; color: #0c5460; }
+    .clip-tag.style-cinematic { background: #f8d7da; color: #721c24; }
+    .clip-tag.style-animated { background: #fff3cd; color: #856404; }
+    .clip-tag.style-comic { background: #d4edda; color: #155724; }
+    
+    .clip-tag.type-hook { background: #cce5ff; color: #004085; }
+    .clip-tag.type-problem { background: #f8d7da; color: #721c24; }
+    .clip-tag.type-solution { background: #d4edda; color: #155724; }
+    .clip-tag.type-cta { background: #fff3cd; color: #856404; }
+    
+    .clip-rating {
+        color: #ffc107;
+        font-size: 0.875rem;
+    }
+    
+    .clip-usage {
+        font-size: 0.75rem;
+        color: #6c757d;
+    }
+    
+    .search-input {
+        border-radius: 24px;
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+    
+    .add-to-usecase-btn {
+        width: 100%;
+        margin-top: 0.5rem;
+    }
+    
+    .empty-state {
+        text-align: center;
+        padding: 4rem 2rem;
+    }
+    
+    .empty-state i {
+        font-size: 4rem;
+        color: #dee2e6;
+        margin-bottom: 1rem;
+    }
+    
+    .loading-spinner {
+        display: flex;
+        justify-content: center;
+        padding: 4rem;
+    }
+    
+    .pagination-container {
+        display: flex;
+        justify-content: center;
+        margin-top: 2rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="library-header">
+    <div class="container">
+        <div class="row align-items-center">
+            <div class="col-md-8">
+                <h1 class="mb-2"><i class="bi bi-collection-play me-2"></i>Clip Library</h1>
+                <p class="mb-0 text-white-50">Browse, search, and reuse your best video clips across projects.</p>
+            </div>
+            <div class="col-md-4">
+                <div class="row g-2">
+                    <div class="col-6">
+                        <div class="stats-card">
+                            <div class="stats-number" id="totalClips">0</div>
+                            <div class="stats-label">Total Clips</div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="stats-card">
+                            <div class="stats-number" id="favoriteClips">0</div>
+                            <div class="stats-label">Favorites</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <!-- Filters -->
+    <div class="filter-section">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label">Search</label>
+                <div class="input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control search-input" id="searchInput" placeholder="Search clips...">
+                </div>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Content Type</label>
+                <select class="form-select" id="contentTypeFilter">
+                    <option value="">All Types</option>
+                    <option value="hook">Hook</option>
+                    <option value="problem">Problem</option>
+                    <option value="solution">Solution</option>
+                    <option value="benefits">Benefits</option>
+                    <option value="social_proof">Social Proof</option>
+                    <option value="cta">CTA</option>
+                    <option value="product">Product</option>
+                    <option value="demo">Demo</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Style</label>
+                <select class="form-select" id="styleFilter">
+                    <option value="">All Styles</option>
+                    <option value="realistic">Realistic</option>
+                    <option value="cinematic">Cinematic</option>
+                    <option value="animated">Animated</option>
+                    <option value="comic">Comic</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Format</label>
+                <select class="form-select" id="formatFilter">
+                    <option value="">All Formats</option>
+                    <option value="9:16">Vertical (9:16)</option>
+                    <option value="16:9">Horizontal (16:9)</option>
+                    <option value="1:1">Square (1:1)</option>
+                    <option value="4:5">Portrait (4:5)</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <div class="form-check mt-4">
+                    <input class="form-check-input" type="checkbox" id="favoritesOnly">
+                    <label class="form-check-label" for="favoritesOnly">
+                        <i class="bi bi-star-fill text-warning"></i> Favorites Only
+                    </label>
+                </div>
+            </div>
+        </div>
+        <div class="row mt-3">
+            <div class="col-md-6">
+                <label class="form-label">Sort By</label>
+                <div class="btn-group" role="group">
+                    <input type="radio" class="btn-check" name="sortBy" id="sortNewest" value="added_to_library_at" checked>
+                    <label class="btn btn-outline-primary" for="sortNewest">Newest</label>
+                    
+                    <input type="radio" class="btn-check" name="sortBy" id="sortRating" value="rating">
+                    <label class="btn btn-outline-primary" for="sortRating">Rating</label>
+                    
+                    <input type="radio" class="btn-check" name="sortBy" id="sortUsage" value="usage_count">
+                    <label class="btn btn-outline-primary" for="sortUsage">Most Used</label>
+                </div>
+            </div>
+            <div class="col-md-6 text-md-end">
+                <button class="btn btn-outline-secondary" onclick="clearFilters()">
+                    <i class="bi bi-x-circle me-1"></i>Clear Filters
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Use Case Selector (for adding clips) -->
+    <div class="alert alert-info d-none" id="addToUseCaseBanner">
+        <div class="d-flex align-items-center justify-content-between">
+            <div>
+                <i class="bi bi-plus-circle me-2"></i>
+                <strong>Adding clips to use case:</strong> <span id="targetUseCaseName"></span>
+            </div>
+            <button class="btn btn-sm btn-outline-dark" onclick="cancelAddToUseCase()">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Clips Grid -->
+    <div id="clipsContainer">
+        <div class="loading-spinner">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pagination -->
+    <div class="pagination-container" id="paginationContainer"></div>
+</div>
+
+<!-- Clip Detail Modal -->
+<div class="modal fade" id="clipDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="clipDetailTitle">Clip Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div id="clipDetailVideo" class="rounded overflow-hidden mb-3"></div>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 id="clipDetailName"></h6>
+                        <p class="text-muted" id="clipDetailDescription"></p>
+                        <div id="clipDetailTags" class="mb-3"></div>
+                        <div class="mb-3">
+                            <label class="form-label">Rating</label>
+                            <div id="clipDetailRating"></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Prompt Used</label>
+                            <textarea class="form-control" id="clipDetailPrompt" rows="4" readonly></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-danger" onclick="archiveCurrentClip()">
+                    <i class="bi bi-archive me-1"></i>Archive
+                </button>
+                <button type="button" class="btn btn-primary" id="addToUseCaseBtn" onclick="addCurrentClipToUseCase()">
+                    <i class="bi bi-plus-circle me-1"></i>Add to Use Case
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentPage = 1;
+let currentClipId = null;
+let targetUseCaseId = null;
+let clips = [];
+
+// Load clips on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadLibraryStats();
+    loadClips();
+    
+    // Setup filter listeners
+    document.getElementById('searchInput').addEventListener('input', debounce(loadClips, 300));
+    document.getElementById('contentTypeFilter').addEventListener('change', loadClips);
+    document.getElementById('styleFilter').addEventListener('change', loadClips);
+    document.getElementById('formatFilter').addEventListener('change', loadClips);
+    document.getElementById('favoritesOnly').addEventListener('change', loadClips);
+    document.querySelectorAll('input[name="sortBy"]').forEach(radio => {
+        radio.addEventListener('change', loadClips);
+    });
+    
+    // Check for target use case in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    targetUseCaseId = urlParams.get('use_case_id');
+    if (targetUseCaseId) {
+        loadTargetUseCase(targetUseCaseId);
+    }
+});
+
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+async function loadLibraryStats() {
+    try {
+        const response = await fetch('/api/library/stats');
+        const data = await response.json();
+        
+        if (data.success) {
+            document.getElementById('totalClips').textContent = data.stats.total_clips;
+            document.getElementById('favoriteClips').textContent = data.stats.favorites;
+        }
+    } catch (error) {
+        console.error('Error loading stats:', error);
+    }
+}
+
+async function loadClips() {
+    const container = document.getElementById('clipsContainer');
+    container.innerHTML = `
+        <div class="loading-spinner">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+        </div>
+    `;
+    
+    const params = new URLSearchParams({
+        page: currentPage,
+        per_page: 24
+    });
+    
+    const search = document.getElementById('searchInput').value;
+    if (search) params.append('search', search);
+    
+    const contentType = document.getElementById('contentTypeFilter').value;
+    if (contentType) params.append('content_type', contentType);
+    
+    const style = document.getElementById('styleFilter').value;
+    if (style) params.append('style', style);
+    
+    const format = document.getElementById('formatFilter').value;
+    if (format) params.append('format', format);
+    
+    const favoritesOnly = document.getElementById('favoritesOnly').checked;
+    if (favoritesOnly) params.append('favorites', 'true');
+    
+    const sortBy = document.querySelector('input[name="sortBy"]:checked').value;
+    params.append('sort', sortBy);
+    
+    try {
+        const response = await fetch(`/api/library/clips?${params}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            clips = data.clips;
+            renderClips(clips);
+            renderPagination(data.pagination);
+        } else {
+            container.innerHTML = `
+                <div class="alert alert-danger">
+                    Error loading clips: ${data.error}
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('Error loading clips:', error);
+        container.innerHTML = `
+            <div class="alert alert-danger">
+                Failed to load clips. Please try again.
+            </div>
+        `;
+    }
+}
+
+function renderClips(clips) {
+    const container = document.getElementById('clipsContainer');
+    
+    if (clips.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="bi bi-collection-play"></i>
+                <h4>No clips found</h4>
+                <p class="text-muted">Try adjusting your filters or add some clips to the library.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    container.innerHTML = `
+        <div class="row g-4">
+            ${clips.map(clip => renderClipCard(clip)).join('')}
+        </div>
+    `;
+}
+
+function renderClipCard(clip) {
+    const thumbnailUrl = clip.thumbnail_path ? `/uploads/${clip.thumbnail_path}` : '';
+    
+    const styleClass = clip.style ? `style-${clip.style}` : '';
+    const typeClass = clip.content_type ? `type-${clip.content_type}` : '';
+    
+    const ratingStars = clip.rating > 0 
+        ? '<i class="bi bi-star-fill"></i>'.repeat(clip.rating) + '<i class="bi bi-star"></i>'.repeat(5 - clip.rating)
+        : '<span class="text-muted">Not rated</span>';
+    
+    return `
+        <div class="col-6 col-md-4 col-lg-3">
+            <div class="clip-card" onclick="openClipDetail(${clip.id})">
+                <div class="clip-thumbnail">
+                    ${thumbnailUrl ? 
+                        `<img src="${thumbnailUrl}" alt="${clip.name}">` : 
+                        `<div class="no-image"><i class="bi bi-film fs-1"></i></div>`
+                    }
+                    ${clip.duration ? `<span class="clip-duration">${clip.duration}s</span>` : ''}
+                    <button class="clip-favorite ${clip.is_favorite ? 'active' : ''}" 
+                            onclick="event.stopPropagation(); toggleFavorite(${clip.id}, ${!clip.is_favorite})"
+                            title="${clip.is_favorite ? 'Remove from favorites' : 'Add to favorites'}">
+                        <i class="bi bi-star${clip.is_favorite ? '-fill' : ''}"></i>
+                    </button>
+                </div>
+                <div class="clip-content">
+                    <div class="clip-title" title="${clip.name}">${clip.name}</div>
+                    <div class="clip-meta">
+                        ${clip.content_type ? `<span class="clip-tag ${typeClass}">${clip.content_type}</span>` : ''}
+                        ${clip.style ? `<span class="clip-tag ${styleClass}">${clip.style}</span>` : ''}
+                        ${clip.format ? `<span class="clip-tag">${clip.format}</span>` : ''}
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div class="clip-rating">${ratingStars}</div>
+                        <div class="clip-usage"><i class="bi bi-check-circle me-1"></i>${clip.usage_count} uses</div>
+                    </div>
+                    ${targetUseCaseId ? `
+                        <button class="btn btn-sm btn-primary add-to-usecase-btn" onclick="event.stopPropagation(); addClipToUseCase(${clip.id})">
+                            <i class="bi bi-plus-circle me-1"></i>Add to Use Case
+                        </button>
+                    ` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderPagination(pagination) {
+    const container = document.getElementById('paginationContainer');
+    
+    if (pagination.pages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+    
+    let pages = [];
+    const maxVisible = 5;
+    let startPage = Math.max(1, pagination.page - Math.floor(maxVisible / 2));
+    let endPage = Math.min(pagination.pages, startPage + maxVisible - 1);
+    
+    if (endPage - startPage < maxVisible - 1) {
+        startPage = Math.max(1, endPage - maxVisible + 1);
+    }
+    
+    for (let i = startPage; i <= endPage; i++) {
+        pages.push(i);
+    }
+    
+    container.innerHTML = `
+        <nav>
+            <ul class="pagination">
+                <li class="page-item ${!pagination.has_prev ? 'disabled' : ''}">
+                    <a class="page-link" href="#" onclick="goToPage(${pagination.page - 1}); return false;">Previous</a>
+                </li>
+                ${pages.map(p => `
+                    <li class="page-item ${p === pagination.page ? 'active' : ''}">
+                        <a class="page-link" href="#" onclick="goToPage(${p}); return false;">${p}</a>
+                    </li>
+                `).join('')}
+                <li class="page-item ${!pagination.has_next ? 'disabled' : ''}">
+                    <a class="page-link" href="#" onclick="goToPage(${pagination.page + 1}); return false;">Next</a>
+                </li>
+            </ul>
+        </nav>
+    `;
+}
+
+function goToPage(page) {
+    currentPage = page;
+    loadClips();
+}
+
+function clearFilters() {
+    document.getElementById('searchInput').value = '';
+    document.getElementById('contentTypeFilter').value = '';
+    document.getElementById('styleFilter').value = '';
+    document.getElementById('formatFilter').value = '';
+    document.getElementById('favoritesOnly').checked = false;
+    document.getElementById('sortNewest').checked = true;
+    currentPage = 1;
+    loadClips();
+}
+
+async function toggleFavorite(clipId, isFavorite) {
+    try {
+        const response = await fetch(`/api/library/clips/${clipId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+            body: JSON.stringify({ is_favorite: isFavorite })
+        });
+        
+        if (response.ok) {
+            loadClips();
+            loadLibraryStats();
+        }
+    } catch (error) {
+        console.error('Error toggling favorite:', error);
+    }
+}
+
+async function openClipDetail(clipId) {
+    currentClipId = clipId;
+    
+    try {
+        const response = await fetch(`/api/library/clips/${clipId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            const clip = data.clip;
+            
+            document.getElementById('clipDetailTitle').textContent = clip.name;
+            document.getElementById('clipDetailName').textContent = clip.name;
+            document.getElementById('clipDetailDescription').textContent = clip.description || 'No description';
+            document.getElementById('clipDetailPrompt').value = clip.prompt || 'No prompt available';
+            
+            // Video player
+            const videoContainer = document.getElementById('clipDetailVideo');
+            if (clip.file_path) {
+                videoContainer.innerHTML = `
+                    <video controls class="w-100" style="max-height: 400px;">
+                        <source src="/uploads/${clip.file_path}" type="video/mp4">
+                    </video>
+                `;
+            } else {
+                videoContainer.innerHTML = '<div class="alert alert-secondary">No video available</div>';
+            }
+            
+            // Tags
+            const tagsContainer = document.getElementById('clipDetailTags');
+            const styleClass = clip.style ? `style-${clip.style}` : '';
+            const typeClass = clip.content_type ? `type-${clip.content_type}` : '';
+            tagsContainer.innerHTML = `
+                ${clip.content_type ? `<span class="clip-tag ${typeClass} me-1">${clip.content_type}</span>` : ''}
+                ${clip.style ? `<span class="clip-tag ${styleClass} me-1">${clip.style}</span>` : ''}
+                ${clip.format ? `<span class="clip-tag me-1">${clip.format}</span>` : ''}
+            `;
+            
+            // Rating
+            const ratingContainer = document.getElementById('clipDetailRating');
+            ratingContainer.innerHTML = [1, 2, 3, 4, 5].map(star => `
+                <button class="btn btn-link p-0 me-1" onclick="rateClip(${clipId}, ${star})">
+                    <i class="bi bi-star${star <= clip.rating ? '-fill' : ''} fs-4 ${star <= clip.rating ? 'text-warning' : 'text-muted'}"></i>
+                </button>
+            `).join('');
+            
+            const modal = new bootstrap.Modal(document.getElementById('clipDetailModal'));
+            modal.show();
+        }
+    } catch (error) {
+        console.error('Error loading clip detail:', error);
+    }
+}
+
+async function rateClip(clipId, rating) {
+    try {
+        const response = await fetch(`/api/library/clips/${clipId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+            body: JSON.stringify({ rating: rating })
+        });
+        
+        if (response.ok) {
+            openClipDetail(clipId);
+            loadClips();
+        }
+    } catch (error) {
+        console.error('Error rating clip:', error);
+    }
+}
+
+async function archiveCurrentClip() {
+    if (!confirm('Archive this clip? It will be hidden from the library but can be restored later.')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/library/clips/${currentClipId}`, {
+            method: 'DELETE',
+            headers: { 'X-CSRFToken': '{{ csrf_token() }}' }
+        });
+        
+        if (response.ok) {
+            bootstrap.Modal.getInstance(document.getElementById('clipDetailModal')).hide();
+            loadClips();
+            loadLibraryStats();
+        }
+    } catch (error) {
+        console.error('Error archiving clip:', error);
+    }
+}
+
+async function loadTargetUseCase(useCaseId) {
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            document.getElementById('targetUseCaseName').textContent = data.use_case.name;
+            document.getElementById('addToUseCaseBanner').classList.remove('d-none');
+        }
+    } catch (error) {
+        console.error('Error loading use case:', error);
+    }
+}
+
+function cancelAddToUseCase() {
+    targetUseCaseId = null;
+    document.getElementById('addToUseCaseBanner').classList.add('d-none');
+    loadClips();
+}
+
+async function addClipToUseCase(libraryClipId) {
+    if (!targetUseCaseId) {
+        alert('No use case selected');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/use-cases/${targetUseCaseId}/library-clips`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+            body: JSON.stringify({ library_clip_id: libraryClipId })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('Clip added to use case!');
+        } else {
+            alert('Error: ' + (data.error || 'Failed to add clip'));
+        }
+    } catch (error) {
+        console.error('Error adding clip to use case:', error);
+        alert('Failed to add clip to use case');
+    }
+}
+
+function showToast(message) {
+    const toastContainer = document.createElement('div');
+    toastContainer.className = 'toast-container position-fixed top-0 end-0 p-3';
+    toastContainer.style.zIndex = '1055';
+    
+    toastContainer.innerHTML = `
+        <div class="toast align-items-center text-white bg-success border-0" role="alert">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="bi bi-check-circle me-2"></i>${message}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(toastContainer);
+    const toast = new bootstrap.Toast(toastContainer.querySelector('.toast'));
+    toast.show();
+    
+    toastContainer.querySelector('.toast').addEventListener('hidden.bs.toast', () => {
+        toastContainer.remove();
+    });
+}
+</script>
+{% endblock %}

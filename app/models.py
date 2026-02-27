@@ -287,6 +287,97 @@ class VideoClip(db.Model):
 
         return 'general'
 
+
+class ClipLibrary(db.Model):
+    """Shared clip library for reusable video clips across products and use cases."""
+    
+    __tablename__ = 'clip_library'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    
+    # Source information (where this clip came from)
+    original_clip_id = db.Column(db.Integer, db.ForeignKey('video_clips.id'), nullable=True)
+    original_product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=True)
+    original_use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=True)
+    
+    # File paths (copied from original clip)
+    file_path = db.Column(db.String(500), nullable=False)
+    thumbnail_path = db.Column(db.String(500))
+    
+    # Metadata for search/filter
+    name = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text)
+    content_type = db.Column(db.String(50))  # hook, problem, solution, cta, product, etc.
+    style = db.Column(db.String(50))  # realistic, cinematic, animated, comic
+    format = db.Column(db.String(20))  # 9:16, 16:9, 1:1, 4:5
+    duration = db.Column(db.Float)
+    
+    # Tags for categorization
+    tags = db.Column(db.JSON, default=list)
+    
+    # Prompt and model info (for reference)
+    prompt = db.Column(db.Text)
+    model_used = db.Column(db.String(50))
+    
+    # Quality rating (user can rate clips 1-5)
+    rating = db.Column(db.Integer, default=0)  # 0 = not rated, 1-5 = star rating
+    is_favorite = db.Column(db.Boolean, default=False)
+    usage_count = db.Column(db.Integer, default=0)  # How many times used
+    
+    # Status
+    status = db.Column(db.String(50), default='active')  # active, archived
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    added_to_library_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    original_clip = db.relationship('VideoClip', backref='library_entries')
+    original_product = db.relationship('Product', backref='library_clips')
+    
+    def __repr__(self):
+        return f'<ClipLibrary {self.name}>'
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'description': self.description,
+            'content_type': self.content_type,
+            'style': self.style,
+            'format': self.format,
+            'duration': self.duration,
+            'tags': self.tags,
+            'prompt': self.prompt,
+            'model_used': self.model_used,
+            'rating': self.rating,
+            'is_favorite': self.is_favorite,
+            'usage_count': self.usage_count,
+            'file_path': self.file_path,
+            'thumbnail_path': self.thumbnail_path,
+            'status': self.status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'added_to_library_at': self.added_to_library_at.isoformat() if self.added_to_library_at else None
+        }
+
+
+class UseCaseLibraryClip(db.Model):
+    """Association table linking library clips to use cases."""
+    
+    __tablename__ = 'use_case_library_clips'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=False)
+    library_clip_id = db.Column(db.Integer, db.ForeignKey('clip_library.id'), nullable=False)
+    sequence_order = db.Column(db.Integer, default=0)
+    added_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationship
+    library_clip = db.relationship('ClipLibrary', backref='use_case_links')
+    
+    def __repr__(self):
+        return f'<UseCaseLibraryClip {self.use_case_id}:{self.library_clip_id}>'
+
+
 class FinalVideo(db.Model):
     """Final assembled video with voiceover."""
     
