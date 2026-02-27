@@ -71,11 +71,18 @@ class ScriptGenerator:
             )
             import logging
             logger = logging.getLogger(__name__)
-            logger.info(f"Raw response type: {type(response)}")
-            logger.info(f"Raw response: {response}")
-            raw_content = response.choices[0].message.content
-            logger.info(f"Raw content: {repr(raw_content)}")
+            logger.info(f"Response received")
+            logger.info(f"Choices count: {len(response.choices) if response.choices else 0}")
+            if response.choices:
+                logger.info(f"First choice: {response.choices[0]}")
+                logger.info(f"Message: {response.choices[0].message}")
+                raw_content = response.choices[0].message.content
+                logger.info(f"Raw content: {repr(raw_content)}")
+            else:
+                raw_content = ""
+                logger.error("No choices in response")
             script_content = raw_content.strip() if raw_content else ""
+            logger.info(f"Stripped content: {repr(script_content)}")
             script_content = self._clean_script(script_content)
             logger.info(f"Cleaned content: {repr(script_content)}")
             if not script_content:
