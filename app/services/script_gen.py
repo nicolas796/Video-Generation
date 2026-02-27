@@ -213,7 +213,8 @@ Provide ONLY the refined script text. No explanations."""
         tone = tone_guidance.get(style, "conversational and engaging")
         return f"""You are an expert copywriter specializing in short-form video scripts.
 Create a {duration}-second script with a {tone} tone. Hook viewers quickly, highlight benefits, and end with a CTA.
-Keep sentences short, natural, and easy to speak."""
+Keep sentences short, natural, and easy to speak.
+IMPORTANT: Respond in English only. Do not use Chinese characters."""
 
     def _build_user_prompt(
         self,
