@@ -1063,11 +1063,14 @@ def generate_script_route(use_case_id):
         }
         
         # Generate script
+        current_app.logger.info(f"Generating script for use_case {use_case_id}")
         generator = ScriptGenerator(api_key=api_key)
         result = generator.generate_script(product_data, use_case_config)
         
         if not result['success']:
-            return jsonify({'error': result.get('error', 'Script generation failed')}), 500
+            error_msg = result.get('error', 'Script generation failed')
+            current_app.logger.error(f"Script generation failed: {error_msg}")
+            return jsonify({'error': error_msg}), 500
         
         # Save or update script
         if existing_script:
@@ -1102,6 +1105,9 @@ def generate_script_route(use_case_id):
         })
         
     except Exception as e:
+        import traceback
+        current_app.logger.error(f"Script generation exception: {type(e).__name__}: {e}")
+        current_app.logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 

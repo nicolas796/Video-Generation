@@ -35,7 +35,14 @@ class ScriptGenerator:
     def _chat_completion(self, messages, **kwargs):
         if not self.client:
             raise RuntimeError("Kimi client is not configured")
-        return self.client.chat.completions.create(messages=messages, **kwargs)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Calling Moonshot API with model: {kwargs.get('model')}")
+        try:
+            return self.client.chat.completions.create(messages=messages, **kwargs)
+        except Exception as e:
+            logger.error(f"Moonshot API error: {type(e).__name__}: {e}")
+            raise
 
     # ------------------------------------------------------------------
     def generate_script(
