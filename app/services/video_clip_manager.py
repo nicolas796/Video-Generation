@@ -13,6 +13,7 @@ from flask import current_app, request
 from app import db
 from app.models import VideoClip, UseCase, Product
 from app.services.pollo_ai import PolloAIClient
+from app.services.clip_prompt_generator import ClipPromptGenerator
 from app.utils import ExternalAPIError, NonRetryableAPIError
 
 
@@ -104,7 +105,10 @@ class VideoClipManager:
         product: Product,
         num_clips: Optional[int] = None
     ) -> List[Dict[str, Any]]:
-        """Generate video prompts for each clip based on use case and script.
+        """Generate video prompts for each clip using GPT-4o Vision.
+        
+        Uses AI to analyze product images and create context-aware prompts
+        that match the script, use case, and clip's narrative role.
         
         Args:
             use_case: The use case configuration
@@ -113,12 +117,70 @@ class VideoClipManager:
             num_clips: Number of clips to generate (defaults to use_case.num_clips)
             
         Returns:
-            List of clip configurations with prompts
+            List of clip configurations with AI-generated prompts
         """
         if num_clips is None:
             num_clips = use_case.num_clips or getattr(use_case, 'calculated_num_clips', None) or 4
         
-        # Determine clip types based on narrative structure
+        # Get product images
+        product_images = self._get_product_images(product)
+        
+        # Use GPT-4o Vision-powered prompt generator
+        generator = ClipPromptGenerator(api_key=self.api_key)
+        
+        try:
+            clips_config = generator.generate_clip_prompts(
+                product=product,
+                use_case=use_case,
+                script_content=script_content,
+                product_images=product_images,
+                num_clips=num_clips
+            )
+            
+            self._log_info(f"Generated {len(clips_config)} AI-powered clip prompts", 
+                          use_case_id=use_case.id,
+                          product_name=product.name)
+            
+            return clips_config
+            
+        except Exception as e:
+            self._log_error(f"AI prompt generation failed, falling back to templates: {e}",
+                           use_case_id=use_case.id)
+            # Fallback to original template-based generation
+            return self._generate_template_prompts(use_case, script_content, product, num_clips)
+    
+    def _get_product_images(self, product: Product) -> List[str]:
+        """Get list of product image paths."""
+        images = []
+        
+        # Check if product has images in the database
+        if product.images:
+            if isinstance(product.images, list):
+                images.extend(product.images)
+            elif isinstance(product.images, dict):
+                images.extend(product.images.values())
+        
+        # Also check the product upload folder
+        product_folder = os.path.join(self.upload_folder, 'products', str(product.id))
+        if os.path.exists(product_folder):
+            folder_images = [f"products/{product.id}/{f}" 
+                           for f in os.listdir(product_folder)
+                           if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
+            # Add any found images not already in the list
+            for img in folder_images:
+                if img not in images:
+                    images.append(img)
+        
+        return images
+    
+    def _generate_template_prompts(
+        self,
+        use_case: UseCase,
+        script_content: str,
+        product: Product,
+        num_clips: int
+    ) -> List[Dict[str, Any]]:
+        """Fallback: Generate prompts using templates (original method)."""
         clip_types = self._determine_clip_types(num_clips)
         
         clips_config = []
@@ -136,7 +198,9 @@ class VideoClipManager:
                 'sequence_order': i,
                 'clip_type': clip_type,
                 'prompt': prompt,
-                'estimated_duration': 5  # Default 5 seconds per clip
+                'motion_direction': 'smooth camera movement',
+                'mood': 'professional',
+                'estimated_duration': 5
             })
         
         return clips_config
