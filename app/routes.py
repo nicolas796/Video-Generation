@@ -227,6 +227,114 @@ def index():
     return render_template('index.html')
 
 
+@main_bp.route('/api/dashboard/status')
+@login_required
+def get_dashboard_status():
+    """Get user's dashboard status including active projects and progress."""
+    from app.services.pipeline_progress import PipelineProgressTracker
+    
+    # Get user's products with their use cases
+    products = Product.query.order_by(Product.created_at.desc()).limit(10).all()
+    
+    # Build product progress data
+    product_progress = []
+    active_projects = []
+    
+    for product in products:
+        product_data = product.to_dict()
+        use_cases = UseCase.query.filter_by(product_id=product.id).order_by(UseCase.created_at.desc()).all()
+        
+        # Determine product stage based on use cases
+        if not use_cases:
+            current_stage = 'scraped'
+            stage_label = 'Scraped - Needs Use Case'
+            progress_pct = 12.5  # 1/8 stages
+            next_url = f"/use-case/{product.id}"
+        else:
+            # Get the most active use case
+            use_case = use_cases[0]
+            pipeline = PipelineProgressTracker.summarize(use_case)
+            
+            # Determine current stage from pipeline
+            stages_order = ['script', 'clips', 'analysis', 'assembly', 'final_output']
+            current_pipeline_stage = None
+            
+            for stage in stages_order:
+                stage_data = pipeline['stages'].get(stage, {})
+                if stage_data.get('status') in ['pending', 'running', 'awaiting_approval', 'error']:
+                    current_pipeline_stage = stage
+                    break
+            
+            if not current_pipeline_stage:
+                current_pipeline_stage = 'final_output'
+            
+            # Map to UI stages
+            stage_mapping = {
+                'script': ('script', 'Script Generation', 37.5, f"/script/{use_case.id}"),
+                'clips': ('video_gen', 'Video Generation', 62.5, f"/video-gen/{use_case.id}"),
+                'analysis': ('video_gen', 'Clip Analysis', 62.5, f"/video-gen/{use_case.id}"),
+                'assembly': ('assembly', 'Video Assembly', 87.5, f"/assembly/{use_case.id}"),
+                'final_output': ('output', 'Final Output', 100, f"/output/{use_case.id}")
+            }
+            
+            stage_info = stage_mapping.get(current_pipeline_stage, ('scraped', 'In Progress', 50, f"/use-case/{product.id}"))
+            current_stage = stage_info[0]
+            stage_label = stage_info[1]
+            progress_pct = stage_info[2]
+            next_url = stage_info[3]
+            
+            # Check if this is an active/incomplete project
+            script = Script.query.filter_by(use_case_id=use_case.id).first()
+            is_complete = (
+                pipeline['has_final_video'] or 
+                (script and script.status == 'approved' and pipeline['clip_stats'].get('complete', 0) > 0)
+            )
+            
+            if not is_complete:
+                active_projects.append({
+                    'product_id': product.id,
+                    'product_name': product.name,
+                    'use_case_id': use_case.id,
+                    'use_case_name': use_case.name,
+                    'current_stage': current_stage,
+                    'stage_label': stage_label,
+                    'progress_pct': progress_pct,
+                    'next_url': next_url,
+                    'updated_at': product.updated_at.isoformat() if product.updated_at else None
+                })
+        
+        product_progress.append({
+            'product': product_data,
+            'current_stage': current_stage,
+            'stage_label': stage_label,
+            'progress_pct': progress_pct,
+            'next_url': next_url,
+            'use_case_count': len(use_cases)
+        })
+    
+    # Calculate stats
+    total_products = Product.query.count()
+    total_use_cases = UseCase.query.count()
+    total_clips = VideoClip.query.count()
+    total_final_videos = FinalVideo.query.filter_by(status='complete').count()
+    
+    # Get recent activity (last 5 products)
+    recent_products = product_progress[:5]
+    
+    return jsonify({
+        'success': True,
+        'stats': {
+            'total_products': total_products,
+            'total_use_cases': total_use_cases,
+            'total_clips': total_clips,
+            'total_final_videos': total_final_videos
+        },
+        'active_projects': active_projects[:3],  # Top 3 active projects
+        'recent_products': recent_products,
+        'has_active_projects': len(active_projects) > 0
+    })
+
+
 @main_bp.route('/scrape')
 @login_required
 def scrape_page():

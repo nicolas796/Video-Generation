@@ -9,225 +9,173 @@
             <i class="bi bi-kanban me-2"></i>
             Video Generation Pipeline
         </h1>
-        <p class="text-muted">Create stunning product videos in 8 simple steps. Track your progress below.</p>
+        <p class="text-muted">Create stunning product videos in 6 simple steps. Track your progress below.</p>
+    </div>
+</div>
+
+<!-- Continue Where You Left Off -->
+<div id="continueSection" class="row mb-4 d-none">
+    <div class="col-12">
+        <div class="content-card border-start border-4 border-warning">
+            <div class="d-flex justify-content-between align-items-start flex-wrap">
+                <div>
+                    <h5 class="mb-2">
+                        <i class="bi bi-arrow-return-right me-2 text-warning"></i>
+                        Continue Where You Left Off
+                    </h5>
+                    <p class="text-muted mb-3">You have active projects waiting for your attention.</p>
+                </div>
+                <span class="badge bg-warning text-dark fs-6" id="activeProjectCount">0 active</span>
+            </div>
+            <div id="activeProjectsList" class="row">
+                <!-- Active projects will be inserted here -->
+            </div>
+        </div>
     </div>
 </div>
 
 <!-- Pipeline Visualization -->
 <div class="row mb-4">
     <div class="col-12">
-        <div class="pipeline-container">
-            <div class="pipeline-stages" id="pipelineStages">
-                <div class="pipeline-connector">
-                    <div class="pipeline-connector-progress" id="pipelineProgress"></div>
-                </div>
-                
-                <!-- Stage 1: Input -->
-                <div class="pipeline-stage active" data-stage="1" onclick="setStage(1)">
-                    <div class="stage-icon">
-                        <i class="bi bi-link-45deg"></i>
+        <div class="content-card">
+            <h5 class="mb-3">Pipeline Stages</h5>
+            <div class="pipeline-container">
+                <div class="pipeline-stages" id="pipelineStages">
+                    <div class="pipeline-connector">
+                        <div class="pipeline-connector-progress" id="pipelineProgress"></div>
                     </div>
-                    <span class="stage-number">1</span>
-                    <span class="stage-label">Input</span>
+                    
+                    <!-- Stage 1: Scrape -->
+                    <a href="#" class="pipeline-stage-link" data-stage="scrape" onclick="navigateToStage('scrape', event)">
+                        <div class="pipeline-stage" data-stage="1">
+                            <div class="stage-icon">
+                                <i class="bi bi-download"></i>
+                            </div>
+                            <span class="stage-number">1</span>
+                            <span class="stage-label">Scrape</span>
+                            <span class="stage-status d-none" data-status="pending"></span>
+                        </div>
+                    </a>
+                    
+                    <!-- Stage 2: Spec Sheet -->
+                    <a href="#" class="pipeline-stage-link" data-stage="spec" onclick="navigateToStage('spec', event)">
+                        <div class="pipeline-stage" data-stage="2">
+                            <div class="stage-icon">
+                                <i class="bi bi-file-earmark-text"></i>
+                            </div>
+                            <span class="stage-number">2</span>
+                            <span class="stage-label">Spec Sheet</span>
+                            <span class="stage-status d-none" data-status="pending"></span>
+                        </div>
+                    </a>
+                    
+                    <!-- Stage 3: Use Case -->
+                    <a href="#" class="pipeline-stage-link" data-stage="usecase" onclick="navigateToStage('usecase', event)">
+                        <div class="pipeline-stage" data-stage="3">
+                            <div class="stage-icon">
+                                <i class="bi bi-sliders"></i>
+                            </div>
+                            <span class="stage-number">3</span>
+                            <span class="stage-label">Use Case</span>
+                            <span class="stage-status d-none" data-status="pending"></span>
+                        </div>
+                    </a>
+                    
+                    <!-- Stage 4: Script -->
+                    <a href="#" class="pipeline-stage-link" data-stage="script" onclick="navigateToStage('script', event)">
+                        <div class="pipeline-stage" data-stage="4">
+                            <div class="stage-icon">
+                                <i class="bi bi-chat-square-text"></i>
+                            </div>
+                            <span class="stage-number">4</span>
+                            <span class="stage-label">Script</span>
+                            <span class="stage-status d-none" data-status="pending"></span>
+                        </div>
+                    </a>
+                    
+                    <!-- Stage 5: Video Gen -->
+                    <a href="#" class="pipeline-stage-link" data-stage="video" onclick="navigateToStage('video', event)">
+                        <div class="pipeline-stage" data-stage="5">
+                            <div class="stage-icon">
+                                <i class="bi bi-camera-video"></i>
+                            </div>
+                            <span class="stage-number">5</span>
+                            <span class="stage-label">Video Gen</span>
+                            <span class="stage-status d-none" data-status="pending"></span>
+                        </div>
+                    </a>
+                    
+                    <!-- Stage 6: Output -->
+                    <a href="#" class="pipeline-stage-link" data-stage="output" onclick="navigateToStage('output', event)">
+                        <div class="pipeline-stage" data-stage="6">
+                            <div class="stage-icon">
+                                <i class="bi bi-play-circle"></i>
+                            </div>
+                            <span class="stage-number">6</span>
+                            <span class="stage-label">Output</span>
+                            <span class="stage-status d-none" data-status="pending"></span>
+                        </div>
+                    </a>
                 </div>
-                
-                <!-- Stage 2: Scraping -->
-                <div class="pipeline-stage" data-stage="2" onclick="setStage(2)">
-                    <div class="stage-icon">
-                        <i class="bi bi-download"></i>
+            </div>
+            <div class="mt-3 text-center">
+                <small class="text-muted">
+                    <i class="bi bi-info-circle me-1"></i>
+                    Click any stage to continue working, or start fresh below
+                </small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Quick Start -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="content-card">
+            <h5 class="mb-3">
+                <i class="bi bi-rocket me-2 text-primary"></i>
+                Start New Project
+            </h5>
+            <p class="text-muted mb-3">Enter a product URL to begin the video generation process.</p>
+            
+            <div class="row justify-content-center">
+                <div class="col-md-8 col-lg-6">
+                    <div class="input-group input-group-lg">
+                        <span class="input-group-text bg-white">
+                            <i class="bi bi-globe text-muted"></i>
+                        </span>
+                        <input type="url" class="form-control" id="productUrl" 
+                               placeholder="https://your-store.com/products/product-name">
+                        <button class="btn btn-primary" type="button" onclick="startScraping()">
+                            <i class="bi bi-arrow-right me-1"></i>
+                            Start
+                        </button>
                     </div>
-                    <span class="stage-number">2</span>
-                    <span class="stage-label">Scraping</span>
-                </div>
-                
-                <!-- Stage 3: Spec Sheet -->
-                <div class="pipeline-stage" data-stage="3" onclick="setStage(3)">
-                    <div class="stage-icon">
-                        <i class="bi bi-file-earmark-text"></i>
+                    <div class="form-text text-center mt-2">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Paste a product URL from any e-commerce site
                     </div>
-                    <span class="stage-number">3</span>
-                    <span class="stage-label">Spec Sheet</span>
-                </div>
-                
-                <!-- Stage 4: Use Case -->
-                <div class="pipeline-stage" data-stage="4" onclick="setStage(4)">
-                    <div class="stage-icon">
-                        <i class="bi bi-sliders"></i>
-                    </div>
-                    <span class="stage-number">4</span>
-                    <span class="stage-label">Use Case</span>
-                </div>
-                
-                <!-- Stage 5: Script -->
-                <div class="pipeline-stage" data-stage="5" onclick="setStage(5)">
-                    <div class="stage-icon">
-                        <i class="bi bi-chat-square-text"></i>
-                    </div>
-                    <span class="stage-number">5</span>
-                    <span class="stage-label">Script</span>
-                </div>
-                
-                <!-- Stage 6: Video Gen -->
-                <div class="pipeline-stage" data-stage="6" onclick="setStage(6)">
-                    <div class="stage-icon">
-                        <i class="bi bi-camera-video"></i>
-                    </div>
-                    <span class="stage-number">6</span>
-                    <span class="stage-label">Video Gen</span>
-                </div>
-                
-                <!-- Stage 7: Assembly -->
-                <div class="pipeline-stage" data-stage="7" onclick="setStage(7)">
-                    <div class="stage-icon">
-                        <i class="bi bi-collection-play"></i>
-                    </div>
-                    <span class="stage-number">7</span>
-                    <span class="stage-label">Assembly</span>
-                </div>
-                
-                <!-- Stage 8: Output -->
-                <div class="pipeline-stage" data-stage="8" onclick="setStage(8)">
-                    <div class="stage-icon">
-                        <i class="bi bi-play-circle"></i>
-                    </div>
-                    <span class="stage-number">8</span>
-                    <span class="stage-label">Output</span>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- Stage Content Area -->
-<div class="row">
+<!-- Recent Products -->
+<div class="row mb-4">
     <div class="col-12">
-        <div class="content-card" id="stageContent">
-            <!-- Stage 1: Input -->
-            <div class="stage-panel" data-panel="1">
-                <h4 class="mb-3">
-                    <i class="bi bi-link-45deg me-2 text-primary"></i>
-                    Step 1: Product Input
-                </h4>
-                <p class="text-muted mb-4">Enter a product URL to begin. We support Shopify stores and other e-commerce platforms.</p>
-                
-                <div class="row justify-content-center">
-                    <div class="col-md-8 col-lg-6">
-                        <div class="input-group input-group-lg mb-3">
-                            <span class="input-group-text bg-white">
-                                <i class="bi bi-globe text-muted"></i>
-                            </span>
-                            <input type="url" class="form-control" id="productUrl" 
-                                   placeholder="https://your-store.com/products/product-name">
-                            <button class="btn btn-primary" type="button" onclick="startScraping()">
-                                <i class="bi bi-arrow-right me-1"></i>
-                                Start
-                            </button>
-                        </div>
-                        <div class="form-text text-center">
-                            <i class="bi bi-info-circle me-1"></i>
-                            Paste a product URL from any e-commerce site
-                        </div>
-                    </div>
-                </div>
+        <div class="content-card">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="mb-0">
+                    <i class="bi bi-clock-history me-2"></i>
+                    Recent Projects
+                </h5>
+                <a href="/api/products" class="btn btn-sm btn-outline-primary">View All</a>
             </div>
-            
-            <!-- Stage 2: Scraping (hidden by default) -->
-            <div class="stage-panel d-none" data-panel="2">
-                <h4 class="mb-3">
-                    <i class="bi bi-download me-2 text-primary"></i>
-                    Step 2: Scraping Product Data
-                </h4>
-                <p class="text-muted mb-4">We're extracting product information, images, and reviews from the provided URL.</p>
-                
-                <div class="text-center py-4">
-                    <div class="spinner-border text-primary mb-3" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <p class="text-muted">Scraping in progress...</p>
-                </div>
-            </div>
-            
-            <!-- Stage 3: Spec Sheet -->
-            <div class="stage-panel d-none" data-panel="3">
-                <h4 class="mb-3">
-                    <i class="bi bi-file-earmark-text me-2 text-primary"></i>
-                    Step 3: Product Spec Sheet
-                </h4>
-                <p class="text-muted mb-4">Review and edit the extracted product information.</p>
-                
-                <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-2"></i>
-                    This panel will display the scraped product data for review and editing.
-                </div>
-            </div>
-            
-            <!-- Stage 4: Use Case -->
-            <div class="stage-panel d-none" data-panel="4">
-                <h4 class="mb-3">
-                    <i class="bi bi-sliders me-2 text-primary"></i>
-                    Step 4: Configure Use Case
-                </h4>
-                <p class="text-muted mb-4">Define the video format, style, and target audience.</p>
-                
-                <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-2"></i>
-                    Configuration form will appear here.
-                </div>
-            </div>
-            
-            <!-- Stage 5: Script -->
-            <div class="stage-panel d-none" data-panel="5">
-                <h4 class="mb-3">
-                    <i class="bi bi-chat-square-text me-2 text-primary"></i>
-                    Step 5: Generate Script
-                </h4>
-                <p class="text-muted mb-4">Create a voiceover script optimized for your video.</p>
-                
-                <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-2"></i>
-                    Script generation interface will appear here.
-                </div>
-            </div>
-            
-            <!-- Stage 6: Video Gen -->
-            <div class="stage-panel d-none" data-panel="6">
-                <h4 class="mb-3">
-                    <i class="bi bi-camera-video me-2 text-primary"></i>
-                    Step 6: Generate Video Clips
-                </h4>
-                <p class="text-muted mb-4">Generate video clips using Pollo.ai based on your configuration.</p>
-                
-                <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-2"></i>
-                    Video generation status and preview will appear here.
-                </div>
-            </div>
-            
-            <!-- Stage 7: Assembly -->
-            <div class="stage-panel d-none" data-panel="7">
-                <h4 class="mb-3">
-                    <i class="bi bi-collection-play me-2 text-primary"></i>
-                    Step 7: Assemble Video
-                </h4>
-                <p class="text-muted mb-4">Order clips, add voiceover, and render the final video.</p>
-                
-                <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-2"></i>
-                    Clip ordering and assembly interface will appear here.
-                </div>
-            </div>
-            
-            <!-- Stage 8: Output -->
-            <div class="stage-panel d-none" data-panel="8">
-                <h4 class="mb-3">
-                    <i class="bi bi-play-circle me-2 text-success"></i>
-                    Step 8: Final Output
-                </h4>
-                <p class="text-muted mb-4">Your video is ready! Download or create variations.</p>
-                
-                <div class="alert alert-success">
-                    <i class="bi bi-check-circle me-2"></i>
-                    Final video preview and download options will appear here.
+            <div id="recentProductsList">
+                <div class="text-center py-4 text-muted">
+                    <i class="bi bi-hourglass display-4"></i>
+                    <p class="mt-2">Loading your projects...</p>
                 </div>
             </div>
         </div>
@@ -235,33 +183,52 @@
 </div>
 
 <!-- Quick Stats Row -->
-<div class="row mt-4">
+<div class="row">
     <div class="col-md-3 mb-3">
         <div class="content-card text-center">
             <i class="bi bi-box display-5 text-primary"></i>
-            <h5 class="mt-2 mb-1">0</h5>
+            <h5 class="mt-2 mb-1" id="statProducts">0</h5>
             <small class="text-muted">Products</small>
         </div>
     </div>
     <div class="col-md-3 mb-3">
         <div class="content-card text-center">
             <i class="bi bi-collection display-5 text-info"></i>
-            <h5 class="mt-2 mb-1">0</h5>
+            <h5 class="mt-2 mb-1" id="statUseCases">0</h5>
             <small class="text-muted">Use Cases</small>
         </div>
     </div>
     <div class="col-md-3 mb-3">
         <div class="content-card text-center">
             <i class="bi bi-film display-5 text-warning"></i>
-            <h5 class="mt-2 mb-1">0</h5>
+            <h5 class="mt-2 mb-1" id="statClips">0</h5>
             <small class="text-muted">Video Clips</small>
         </div>
     </div>
     <div class="col-md-3 mb-3">
         <div class="content-card text-center">
             <i class="bi bi-play-btn display-5 text-success"></i>
-            <h5 class="mt-2 mb-1">0</h5>
+            <h5 class="mt-2 mb-1" id="statVideos">0</h5>
             <small class="text-muted">Final Videos</small>
+        </div>
+    </div>
+</div>
+
+<!-- No Active Project Modal -->
+<div class="modal fade" id="noProjectModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">No Active Project</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>You don't have an active project at this stage yet.</p>
+                <p class="text-muted">Start by entering a product URL above to create your first project.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Got it</button>
+            </div>
         </div>
     </div>
 </div>
@@ -269,37 +236,59 @@
 
 {% block extra_js %}
 <script>
-    let currentStage = 1;
-    const totalStages = 8;
+    let dashboardData = null;
     
-    function setStage(stageNum) {
-        // Update current stage
-        currentStage = stageNum;
+    // Stage navigation mapping
+    const stageNav = {
+        'scrape': { url: '/scrape', needsId: false },
+        'spec': { url: '/spec-sheet', needsId: true },
+        'usecase': { url: '/use-case', needsId: true },
+        'script': { url: '/script', needsId: true },
+        'video': { url: '/video-gen', needsId: true },
+        'assembly': { url: '/assembly', needsId: true },
+        'output': { url: '/output', needsId: true }
+    };
+    
+    function navigateToStage(stage, event) {
+        event.preventDefault();
         
-        // Update stage visuals
-        document.querySelectorAll('.pipeline-stage').forEach((stage, index) => {
-            const stageNumber = index + 1;
-            stage.classList.remove('active', 'complete');
+        // If we have active projects, navigate to the most recent one at this stage
+        if (dashboardData && dashboardData.active_projects && dashboardData.active_projects.length > 0) {
+            const project = dashboardData.active_projects[0];
+            let url;
             
-            if (stageNumber === currentStage) {
-                stage.classList.add('active');
-            } else if (stageNumber < currentStage) {
-                stage.classList.add('complete');
+            switch(stage) {
+                case 'scrape':
+                    url = '/scrape';
+                    break;
+                case 'spec':
+                    url = `/spec-sheet/${project.product_id}`;
+                    break;
+                case 'usecase':
+                    url = `/use-case/${project.product_id}`;
+                    break;
+                case 'script':
+                    url = `/script/${project.use_case_id}`;
+                    break;
+                case 'video':
+                    url = `/video-gen/${project.use_case_id}`;
+                    break;
+                case 'output':
+                    url = `/output/${project.use_case_id}`;
+                    break;
+                default:
+                    url = '/scrape';
             }
-        });
-        
-        // Update progress bar
-        const progress = ((currentStage - 1) / (totalStages - 1)) * 100;
-        document.getElementById('pipelineProgress').style.width = progress + '%';
-        
-        // Show corresponding panel
-        document.querySelectorAll('.stage-panel').forEach((panel, index) => {
-            if (index + 1 === stageNum) {
-                panel.classList.remove('d-none');
-            } else {
-                panel.classList.add('d-none');
-            }
-        });
+            window.location.href = url;
+        } else if (dashboardData && dashboardData.recent_products && dashboardData.recent_products.length > 0) {
+            // Navigate to most recent product's position
+            const recent = dashboardData.recent_products[0];
+            window.location.href = recent.next_url || '/scrape';
+        } else {
+            // Show modal or redirect to scrape page
+            const modal = new bootstrap.Modal(document.getElementById('noProjectModal'));
+            modal.show();
+        }
     }
     
     function startScraping() {
@@ -316,9 +305,154 @@
         window.location.href = `/scrape?url=${encodedUrl}`;
     }
     
+    function renderActiveProjects(projects) {
+        const container = document.getElementById('activeProjectsList');
+        const section = document.getElementById('continueSection');
+        const countBadge = document.getElementById('activeProjectCount');
+        
+        if (!projects || projects.length === 0) {
+            section.classList.add('d-none');
+            return;
+        }
+        
+        section.classList.remove('d-none');
+        countBadge.textContent = `${projects.length} active`;
+        
+        container.innerHTML = projects.map(project => `
+            <div class="col-md-4 mb-3">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body">
+                        <h6 class="card-title text-truncate" title="${project.product_name}">${project.product_name}</h6>
+                        <p class="card-text small text-muted mb-2">${project.use_case_name}</p>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="badge bg-primary">${project.stage_label}</span>
+                            <small class="text-muted">${Math.round(project.progress_pct)}%</small>
+                        </div>
+                        <div class="progress mb-3" style="height: 6px;">
+                            <div class="progress-bar" role="progressbar" style="width: ${project.progress_pct}%"></div>
+                        </div>
+                        <a href="${project.next_url}" class="btn btn-sm btn-warning w-100">
+                            <i class="bi bi-arrow-return-right me-1"></i>
+                            Continue
+                        </a>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+    
+    function renderRecentProducts(products) {
+        const container = document.getElementById('recentProductsList');
+        
+        if (!products || products.length === 0) {
+            container.innerHTML = `
+                <div class="text-center py-4 text-muted">
+                    <i class="bi bi-inbox display-4"></i>
+                    <p class="mt-2">No projects yet. Start by entering a product URL above!</p>
+                </div>
+            `;
+            return;
+        }
+        
+        container.innerHTML = `
+            <div class="list-group list-group-flush">
+                ${products.map(item => `
+                    <a href="${item.next_url}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                        <div class="d-flex align-items-center">
+                            <div class="bg-light rounded p-2 me-3">
+                                <i class="bi bi-box text-primary"></i>
+                            </div>
+                            <div>
+                                <h6 class="mb-0">${item.product.name}</h6>
+                                <small class="text-muted">${item.product.brand || 'No brand'} • ${item.use_case_count} use case(s)</small>
+                            </div>
+                        </div>
+                        <div class="text-end">
+                            <span class="badge bg-${getStageColor(item.current_stage)} mb-1 d-block">${item.stage_label}</span>
+                            <small class="text-muted">${Math.round(item.progress_pct)}% complete</small>
+                        </div>
+                    </a>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    function getStageColor(stage) {
+        const colors = {
+            'scraped': 'secondary',
+            'spec': 'info',
+            'usecase': 'info',
+            'script': 'primary',
+            'video_gen': 'warning',
+            'assembly': 'warning',
+            'output': 'success'
+        };
+        return colors[stage] || 'secondary';
+    }
+    
+    function updateStats(stats) {
+        document.getElementById('statProducts').textContent = stats.total_products || 0;
+        document.getElementById('statUseCases').textContent = stats.total_use_cases || 0;
+        document.getElementById('statClips').textContent = stats.total_clips || 0;
+        document.getElementById('statVideos').textContent = stats.total_final_videos || 0;
+    }
+    
+    function updatePipelineVisuals(activeProjects) {
+        // Update pipeline stage visuals based on active projects
+        if (!activeProjects || activeProjects.length === 0) return;
+        
+        const project = activeProjects[0];
+        const progress = project.progress_pct || 0;
+        
+        // Update progress bar
+        document.getElementById('pipelineProgress').style.width = progress + '%';
+        
+        // Update stage classes
+        const stages = document.querySelectorAll('.pipeline-stage');
+        const stageOrder = ['scrape', 'spec', 'usecase', 'script', 'video', 'output'];
+        const currentIndex = stageOrder.indexOf(project.current_stage);
+        
+        stages.forEach((stage, index) => {
+            stage.classList.remove('active', 'complete');
+            if (index < currentIndex) {
+                stage.classList.add('complete');
+            } else if (index === currentIndex) {
+                stage.classList.add('active');
+            }
+        });
+    }
+    
+    async function loadDashboardData() {
+        try {
+            const response = await fetch('/api/dashboard/status');
+            const data = await response.json();
+            
+            if (data.success) {
+                dashboardData = data;
+                updateStats(data.stats);
+                renderActiveProjects(data.active_projects);
+                renderRecentProducts(data.recent_products);
+                updatePipelineVisuals(data.active_projects);
+            }
+        } catch (error) {
+            console.error('Failed to load dashboard data:', error);
+            document.getElementById('recentProductsList').innerHTML = `
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    Failed to load dashboard data. Please refresh the page.
+                </div>
+            `;
+        }
+    }
+    
     // Initialize
     document.addEventListener('DOMContentLoaded', function() {
-        setStage(1);
+        loadDashboardData();
+    });
+    
+    // Allow Enter key to submit
+    document.getElementById('productUrl')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') startScraping();
     });
 </script>
 {% endblock %}
