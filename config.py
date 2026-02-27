@@ -78,6 +78,7 @@ class Config:
     POLLO_API_KEY = os.getenv('POLLO_API_KEY', '')
     ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY', '')
     MOONSHOT_API_KEY = os.getenv('MOONSHOT_API_KEY', '')
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 
     # Webhook + external access configuration
     POLLO_WEBHOOK_SECRET = os.getenv('POLLO_WEBHOOK_SECRET', '')
