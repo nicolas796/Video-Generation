@@ -13,6 +13,9 @@ python-dotenv==1.0.0
 requests==2.31.0
 openai==1.30.0
 
+# Web Scraping
+beautifulsoup4==4.12.3
+
 # Image Processing
 Pillow==10.2.0
 
