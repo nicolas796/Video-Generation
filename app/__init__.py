@@ -64,6 +64,10 @@ def create_app(config_name='default'):
     # Register error handlers
     register_error_handlers(app)
     
+    # Register CLI commands
+    from app.cli import init_cli
+    init_cli(app)
+    
     return app
 
 def register_error_handlers(app):

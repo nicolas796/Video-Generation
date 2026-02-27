@@ -31,7 +31,11 @@ def load_user(user_id):
 
 
 def create_default_admin():
-    """Create default admin user from environment variables if it doesn't exist."""
+    """Create default admin user from environment variables if it doesn't exist.
+    
+    This function is called during app startup. It catches ALL database-related
+    exceptions to prevent the app from crashing if the database isn't ready yet.
+    """
     import sqlalchemy.exc
     
     admin_username = os.getenv('ADMIN_USERNAME')
@@ -39,12 +43,14 @@ def create_default_admin():
     
     # Only create if both env vars are set
     if not admin_username or not admin_password:
+        current_app.logger.debug('Skipping admin creation - ADMIN_USERNAME or ADMIN_PASSWORD not set')
         return
     
     try:
         # Check if admin already exists
         existing = User.query.filter_by(username=admin_username).first()
         if existing:
+            current_app.logger.debug(f'Admin user already exists: {admin_username}')
             return
         
         # Create new admin user
@@ -56,10 +62,53 @@ def create_default_admin():
         db.session.add(admin)
         db.session.commit()
         current_app.logger.info(f'Default admin user created: {admin_username}')
-    except sqlalchemy.exc.OperationalError as e:
-        # Table doesn't exist yet (migrations haven't run)
-        current_app.logger.warning(f'Cannot create admin user - database not initialized: {e}')
+    except sqlalchemy.exc.ProgrammingError as e:
+        # Table doesn't exist yet (migrations haven't run) - this is expected on first deploy
+        current_app.logger.warning(f'Cannot create admin user - users table does not exist (migrations needed): {e}')
+        db.session.rollback()
         return
+    except sqlalchemy.exc.OperationalError as e:
+        # Database connection issues or other operational errors
+        current_app.logger.warning(f'Cannot create admin user - database not ready: {e}')
+        db.session.rollback()
+        return
+    except Exception as e:
+        # Catch ALL other exceptions to prevent startup crashes
+        current_app.logger.error(f'Unexpected error creating admin user: {type(e).__name__}: {e}')
+        db.session.rollback()
+        return
+
+
+def create_admin_user(username, password, is_admin=True):
+    """Create an admin/user account manually.
+    
+    Args:
+        username: The username for the new user
+        password: The password for the new user
+        is_admin: Whether the user should have admin privileges (default: True)
+    
+    Returns:
+        Tuple of (success: bool, message: str, user: User or None)
+    """
+    try:
+        # Check if user already exists
+        existing = User.query.filter_by(username=username).first()
+        if existing:
+            return False, f'User "{username}" already exists', existing
+        
+        # Create new user
+        user = User(
+            username=username,
+            is_admin=is_admin
+        )
+        user.set_password(password)
+        db.session.add(user)
+        db.session.commit()
+        
+        return True, f'User "{username}" created successfully', user
+    except Exception as e:
+        db.session.rollback()
+        return False, f'Error creating user: {type(e).__name__}: {e}', None
 
 
 @auth_bp.route('/login', methods=['GET', 'POST'])
