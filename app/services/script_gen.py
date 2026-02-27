@@ -15,16 +15,15 @@ class ScriptGenerator:
     """Create, refine, and estimate short-form video scripts."""
 
     def __init__(self, api_key: Optional[str] = None, *, offline_fallback: bool = True) -> None:
-        self.api_key = api_key or os.getenv("MOONSHOT_API_KEY")
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.offline_fallback = offline_fallback
         self.client: Optional[OpenAI] = None
         if self.api_key:
-            # Use Kimi (Moonshot) API with OpenAI-compatible SDK
+            # Use OpenAI API for script generation
             # Create httpx client without proxy to avoid environment proxy issues
             http_client = httpx.Client(timeout=60.0, follow_redirects=True)
             self.client = OpenAI(
                 api_key=self.api_key,
-                base_url="https://api.moonshot.ai/v1",
                 http_client=http_client
             )
         elif not offline_fallback:
@@ -65,8 +64,8 @@ class ScriptGenerator:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="kimi-k2.5",
-                temperature=1.0,
+                model="gpt-4o",
+                temperature=0.8,
                 max_tokens=500,
             )
             
@@ -152,7 +151,7 @@ OUTPUT: Only the refined script text."""
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                model="kimi-k2.5",
+                model="gpt-4o",
                 temperature=1.0,
                 max_tokens=500,
             )
