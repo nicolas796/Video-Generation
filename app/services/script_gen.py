@@ -274,7 +274,7 @@ Cinematic: "Every sunrise, a choice. Stay the same, or become who you were meant
 
 Animated: "POV: You just discovered the snack that hits different! Crunchy, spicy, sweet - these Korean chips have NO business being this good! I ate the whole bag in one sitting. Stock up before I buy them all! Link below!"
 
-Comic: "Me before coffee: [insert zombie sounds]. Me after this mug: actually functional human. This isn't coffee, it's liquid personality restoration. Get yours before I finish the supply. Link in comments."
+Comic: "Me before coffee: [insert zombie sounds]. Me after this mug: actually functional human. This isn't coffee, it's liquid personality restoration. Get yours before I finish the supply. Link in comments."""
 
     def _build_user_prompt(
         self,
