@@ -349,11 +349,11 @@
             <!-- Generation Button -->
             <div id="generateSection">
                 <button id="generateBtn" class="btn btn-generate w-100" onclick="startGeneration()">
-                    <i class="bi bi-magic me-2"></i>Generate {{ use_case.num_clips or 4 }} Clips
+                    <i class="bi bi-magic me-2"></i>Generate Clips
                 </button>
                 <p class="text-muted small mt-2 mb-0">
                     <i class="bi bi-info-circle me-1"></i>
-                    Estimated time: {{ (use_case.num_clips or 4) * 2 }} minutes
+                    Choose how many clips (1-{{ use_case.num_clips or 4 }}) to generate
                 </p>
             </div>
             
@@ -578,11 +578,26 @@
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Select Product Image for Video</h5>
+                <h5 class="modal-title">Generate Video Clips</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p class="text-muted small mb-3">Choose an image to use as the starting frame for your video. This helps the AI generate a video that actually shows your product.</p>
+                <!-- Clip Count Selector -->
+                <div class="mb-4 p-3 bg-light rounded">
+                    <label class="form-label fw-medium">How many clips to generate?</label>
+                    <div class="d-flex gap-2 align-items-center">
+                        <input type="range" class="form-range flex-grow-1" id="clipCountRange" 
+                               min="1" max="{{ use_case.num_clips or 4 }}" value="1" 
+                               oninput="updateClipCountLabel(this.value)">
+                        <span class="badge bg-primary fs-6" id="clipCountLabel">1</span>
+                    </div>
+                    <div class="d-flex justify-content-between text-muted small mt-1">
+                        <span>1 clip</span>
+                        <span id="maxClipsLabel">{{ use_case.num_clips or 4 }} clips max</span>
+                    </div>
+                </div>
+                
+                <p class="text-muted small mb-3">Choose an image to use as the starting frame for your videos. This helps the AI generate videos that actually show your product.</p>
                 <div id="productImagesGrid" class="row g-3">
                     <!-- Images will be loaded here -->
                 </div>
@@ -860,6 +875,15 @@ async function loadProductImages() {
     }
 }
 
+function updateClipCountLabel(value) {
+    document.getElementById('clipCountLabel').textContent = value;
+}
+
+function getClipCountToGenerate() {
+    const range = document.getElementById('clipCountRange');
+    return range ? parseInt(range.value) : 1;
+}
+
 function selectImage(filename, cardElement) {
     selectedImageFilename = filename;
     
@@ -871,38 +895,49 @@ function selectImage(filename, cardElement) {
     // Add selection to clicked card
     cardElement.classList.add('border-primary', 'border-3');
     
+    // Get clip count
+    const clipCount = getClipCountToGenerate();
+    
     // Close modal and start generation
     const modal = bootstrap.Modal.getInstance(document.getElementById('imageSelectModal'));
     modal.hide();
     
-    // Start generation with selected image
-    startGenerationWithImage(filename);
+    // Start generation with selected image and count
+    startGenerationWithImage(filename, clipCount);
 }
 
 function startGenerationWithoutImage() {
     selectedImageFilename = null;
+    const clipCount = getClipCountToGenerate();
     const modal = bootstrap.Modal.getInstance(document.getElementById('imageSelectModal'));
     modal.hide();
-    startGenerationWithImage(null);
+    startGenerationWithImage(null, clipCount);
 }
 
-async function startGenerationWithImage(imageFilename) {
+async function startGenerationWithImage(imageFilename, clipCount = 1) {
     document.getElementById('generateSection').classList.add('d-none');
     document.getElementById('generatingSection').classList.remove('d-none');
+    
+    const clipText = clipCount === 1 ? 'clip' : 'clips';
     document.getElementById('generatingStatus').textContent = imageFilename 
-        ? 'Starting video generation with product image...'
-        : 'Starting video generation (text only)...';
+        ? `Starting generation of ${clipCount} ${clipText} with product image...`
+        : `Starting generation of ${clipCount} ${clipText} (text only)...`;
     
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/generate-clips`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
-            body: JSON.stringify({ selected_image: imageFilename })
+            body: JSON.stringify({ 
+                selected_image: imageFilename,
+                count: clipCount
+            })
         });
         
         const data = await response.json();
         
         if (response.ok && data.success) {
+            const generatedCount = data.count || 1;
+            showToast(`Started generation of ${generatedCount} clip(s)`);
             loadClips();
             // Start polling
             statusInterval = setInterval(loadClips, 5000);
@@ -917,6 +952,33 @@ async function startGenerationWithImage(imageFilename) {
         document.getElementById('generateSection').classList.remove('d-none');
         document.getElementById('generatingSection').classList.add('d-none');
     }
+}
+
+function showToast(message) {
+    // Create toast element
+    const toastContainer = document.createElement('div');
+    toastContainer.className = 'toast-container position-fixed top-0 end-0 p-3';
+    toastContainer.style.zIndex = '1055';
+    
+    toastContainer.innerHTML = `
+        <div class="toast align-items-center text-white bg-success border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="bi bi-check-circle me-2"></i>${message}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(toastContainer);
+    const toast = new bootstrap.Toast(toastContainer.querySelector('.toast'));
+    toast.show();
+    
+    // Remove after hidden
+    toastContainer.querySelector('.toast').addEventListener('hidden.bs.toast', () => {
+        toastContainer.remove();
+    });
 }
 
 // Upload video functions

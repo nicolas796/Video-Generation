@@ -1358,7 +1358,7 @@ def get_product_images(product_id):
 @main_bp.route('/api/use-cases/<int:use_case_id>/generate-clips', methods=['POST'])
 @login_required
 def generate_video_clips(use_case_id):
-    """Generate a SINGLE video clip for a use case using GPT-4o Vision-powered prompts."""
+    """Generate one or more video clips for a use case using GPT-4o Vision-powered prompts."""
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
@@ -1379,8 +1379,23 @@ def generate_video_clips(use_case_id):
         existing_clips = VideoClip.query.filter_by(use_case_id=use_case_id).count()
         target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
         
+        # How many clips to generate (default to remaining, or 1 if not specified)
+        remaining_clips = target_clips - existing_clips
+        requested_count = data.get('count', remaining_clips if remaining_clips > 0 else 1)
+        
+        # Validate count
+        try:
+            requested_count = int(requested_count)
+        except (TypeError, ValueError):
+            requested_count = 1
+        
+        # Clamp to valid range
+        count = max(1, min(requested_count, remaining_clips))
+        
+        if remaining_clips <= 0:
+            return jsonify({'error': f'All {target_clips} clips already generated. Delete one to regenerate.'}), 400
+        
         # Use GPT-4o Vision to generate context-aware prompts
-        # This analyzes the product image and creates prompts tailored to the clip's narrative role
         clips_config = manager.generate_clip_prompts(
             use_case=use_case,
             script_content=script.content,
@@ -1388,60 +1403,73 @@ def generate_video_clips(use_case_id):
             num_clips=target_clips
         )
         
-        # Get the config for the next clip to generate
-        if existing_clips >= len(clips_config):
-            return jsonify({'error': f'All {target_clips} clips already generated. Delete one to regenerate.'}), 400
+        generated_clips = []
+        errors = []
         
-        clip_config = clips_config[existing_clips]
-        prompt = clip_config['prompt']
-        clip_type = clip_config['clip_type']
+        # Generate requested number of clips
+        for i in range(count):
+            clip_index = existing_clips + i
+            
+            if clip_index >= len(clips_config):
+                break
+            
+            clip_config = clips_config[clip_index]
+            prompt = clip_config['prompt']
+            clip_type = clip_config['clip_type']
+            
+            # Get the public image URL for this clip
+            image_url = None
+            if product.images:
+                if isinstance(product.images, list) and len(product.images) > 0:
+                    image_index = clip_index % len(product.images)
+                    image_url = product.images[image_index]
+            
+            # Create clip with AI-generated prompt
+            clip = manager.create_clip(
+                use_case_id=use_case_id,
+                sequence_order=clip_index,
+                prompt=prompt,
+                length=5
+            )
+            
+            # Start generation
+            result = manager.start_generation(clip.id, image_url=image_url)
+            
+            if result.get('success'):
+                generated_clips.append({
+                    'clip': clip.to_dict(),
+                    'clip_type': clip_type,
+                    'prompt_sent': prompt,
+                    'image_url_used': image_url
+                })
+            else:
+                errors.append({
+                    'clip_index': clip_index,
+                    'error': result.get('error', 'Failed to start generation'),
+                    'prompt_sent': prompt
+                })
         
-        # Get the public image URL for this clip (from the original scraped URLs)
-        image_url = None
-        if product.images:
-            if isinstance(product.images, list) and len(product.images) > 0:
-                image_index = existing_clips % len(product.images)
-                image_url = product.images[image_index]
-        
-        # Create single clip with AI-generated prompt
-        clip = manager.create_clip(
-            use_case_id=use_case_id,
-            sequence_order=existing_clips,
-            prompt=prompt,
-            length=5
-        )
-        
-        # Start generation with the public image URL for image-to-video
-        result = manager.start_generation(clip.id, image_url=image_url)
-        
-        if result.get('success'):
+        if generated_clips:
             use_case.status = 'generating'
             db.session.commit()
             
             return jsonify({
                 'success': True,
-                'clip': clip.to_dict(),
-                'message': f'Started generation of clip {existing_clips + 1} ({clip_type}). Generate again for next clip.',
-                'prompt_sent': prompt,
-                'clip_type': clip_type,
-                'motion_direction': clip_config.get('motion_direction', ''),
-                'mood': clip_config.get('mood', ''),
-                'image_url_used': image_url,
-                'ai_generated': True,
-                'note': 'Using image-to-video with original product image URL.'
+                'clips': generated_clips,
+                'count': len(generated_clips),
+                'errors': errors if errors else None,
+                'message': f'Started generation of {len(generated_clips)} clip(s).'
             })
         else:
             return jsonify({
                 'success': False,
-                'error': result.get('error', 'Failed to start generation'),
-                'prompt_sent': prompt,
-                'clip_type': clip_type,
-                'image_url_used': image_url
+                'error': 'Failed to start any clip generation',
+                'errors': errors
             }), 500
         
     except Exception as e:
         import traceback
-        current_app.logger.error(f"Error generating clip: {e}\n{traceback.format_exc()}")
+        current_app.logger.error(f"Error generating clips: {e}\n{traceback.format_exc()}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
