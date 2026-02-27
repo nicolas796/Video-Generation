@@ -66,7 +66,7 @@ class ScriptGenerator:
                     {"role": "user", "content": user_prompt},
                 ],
                 model="kimi-k2.5",
-                temperature=0.8,
+                temperature=1.0,
                 max_tokens=500,
             )
             script_content = response.choices[0].message.content.strip()
@@ -122,7 +122,7 @@ Provide ONLY the refined script text. No explanations."""
                     {"role": "user", "content": user_prompt},
                 ],
                 model="kimi-k2.5",
-                temperature=0.8,
+                temperature=1.0,
                 max_tokens=500,
             )
             script_content = self._clean_script(response.choices[0].message.content.strip())

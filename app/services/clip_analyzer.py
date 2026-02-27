@@ -205,7 +205,7 @@ class ClipAnalyzer:
 
         return {
             'model': self.model,
-            'temperature': 0.2,
+            'temperature': 1.0,
             'response_format': {'type': 'json_object'},
             'messages': [
                 {'role': 'system', 'content': self.ANALYSIS_PROMPT},
