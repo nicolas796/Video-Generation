@@ -307,7 +307,7 @@ async function applyOptimizedSequence() {
 async function saveClipOrder(sequencePayload) {
     if (!sequencePayload.length) return; document.getElementById('timelineTrack').classList.add('saving');
     try {
-        const response = await fetch(`/api/use-cases/${useCaseId}/clip-order`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clip_orders: sequencePayload }) });
+        const response = await fetch(`/api/use-cases/${useCaseId}/clip-order`, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' }, body: JSON.stringify({ clip_orders: sequencePayload }) });
         const data = await response.json(); if (!data.success) throw new Error(data.error || 'Unable to save order'); await loadAssemblyData();
     } catch (error) { alert(error.message); } finally { document.getElementById('timelineTrack').classList.remove('saving'); updateButtons(); }
 }

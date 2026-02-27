@@ -646,7 +646,7 @@ function showDeleteModal(useCaseId, useCaseName) {
 async function confirmDelete() {
     if (!deleteUseCaseId) return;
     try {
-        const response = await fetch(`/api/use-cases/${deleteUseCaseId}`, { method: 'DELETE' });
+        const response = await fetch(`/api/use-cases/${deleteUseCaseId}`, { method: 'DELETE', headers: { 'X-CSRFToken': '{{ csrf_token() }}' } });
         if (response.ok) {
             deleteModal.hide();
             loadUseCases();
