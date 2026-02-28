@@ -401,7 +401,12 @@ class PolloAIClient:
             '4:3': '4:3',
             '3:4': '3:4'
         }
+        original_aspect = aspect_ratio
         aspect_ratio = aspect_map.get(aspect_ratio, '9:16')
+        
+        # Log aspect ratio mapping for debugging
+        if original_aspect != aspect_ratio:
+            self._fallback_logger.debug(f"Aspect ratio mapped: {original_aspect} -> {aspect_ratio}")
         
         input_data = {}
         

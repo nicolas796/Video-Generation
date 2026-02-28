@@ -499,12 +499,21 @@ class VideoClipManager:
                                      clip_id=clip.id, 
                                      image_url=image_url[:100] + '...' if len(image_url) > 100 else image_url)
             
+            # Determine aspect ratio from use case format
+            # Handle both None and empty string cases
+            aspect_ratio = use_case.format if use_case.format and use_case.format.strip() else '9:16'
+            self._log_info('Starting video generation',
+                         clip_id=clip.id,
+                         aspect_ratio=aspect_ratio,
+                         use_case_format=use_case.format,
+                         model=clip.model_used or 'kling-1.6')
+            
             # Create the video generation job
             webhook_url = self._build_webhook_url()
             result = self.pollo_client.create_video_job(
                 prompt=clip.prompt,
                 model=clip.model_used or 'kling-1.6',
-                aspect_ratio=use_case.format or '9:16',
+                aspect_ratio=aspect_ratio,
                 length=int(clip.duration) if clip.duration else 5,
                 image_url=image_url,
                 webhook_url=webhook_url
@@ -516,19 +525,21 @@ class VideoClipManager:
                 if 'image pixel is invalid' in error_msg or 'invalid image' in error_msg:
                     self._log_info('Image rejected by Pollo, retrying with text-only generation',
                                  clip_id=clip.id,
+                                 aspect_ratio=aspect_ratio,
                                  original_error=result.get('error'))
                     # Retry without image_url
                     result = self.pollo_client.create_video_job(
                         prompt=clip.prompt,
                         model=clip.model_used or 'kling-1.6',
-                        aspect_ratio=use_case.format or '9:16',
+                        aspect_ratio=aspect_ratio,
                         length=int(clip.duration) if clip.duration else 5,
                         image_url=None,  # Retry without image
                         webhook_url=webhook_url
                     )
                     if result.get('success'):
                         self._log_info('Successfully generated clip with text-only fallback',
-                                     clip_id=clip.id)
+                                     clip_id=clip.id,
+                                     aspect_ratio=aspect_ratio)
             
             if result.get('success'):
                 clip.pollo_job_id = result['task_id']
