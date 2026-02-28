@@ -129,6 +129,70 @@ class VideoClipManager:
 
         return f"{base_url.rstrip('/')}/{cleaned.lstrip('/')}"
 
+    def _should_use_image_for_video(self, image_url: str) -> bool:
+        """Check if an image should be used for image-to-video generation.
+        
+        Images with plain white/transparent backgrounds create poor transitions
+        because the video starts with that background. This detects such images.
+        
+        Args:
+            image_url: URL or path to the image
+            
+        Returns:
+            True if image should be used for image-to-video, False for text-to-video
+        """
+        try:
+            # Download or load the image
+            if image_url.startswith(('http://', 'https://')):
+                response = requests.get(image_url, timeout=10)
+                response.raise_for_status()
+                import numpy as np
+                from PIL import Image
+                import io
+                img = Image.open(io.BytesIO(response.content))
+            else:
+                # Local path
+                from PIL import Image
+                if not os.path.isabs(image_url):
+                    image_url = os.path.join(self.upload_folder, image_url.lstrip('/'))
+                img = Image.open(image_url)
+            
+            # Convert to RGB if necessary
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            
+            # Convert to numpy array
+            import numpy as np
+            img_array = np.array(img)
+            
+            # Get border pixels (edges of the image)
+            h, w = img_array.shape[:2]
+            border_pixels = np.concatenate([
+                img_array[0, :, :],      # Top row
+                img_array[-1, :, :],     # Bottom row
+                img_array[:, 0, :],      # Left column
+                img_array[:, -1, :]      # Right column
+            ])
+            
+            # Calculate percentage of white/light pixels in border
+            # White = 255, light gray threshold = 240
+            white_threshold = 240
+            white_pixels = np.all(border_pixels >= white_threshold, axis=1)
+            white_percentage = np.sum(white_pixels) / len(border_pixels)
+            
+            # If >80% of border is white, likely a product on white background
+            if white_percentage > 0.80:
+                self._log_info(f'Image has {white_percentage:.1%} white border, skipping image-to-video')
+                return False
+            
+            return True
+            
+        except Exception as e:
+            self._log_error(f'Failed to analyze image background: {e}')
+            # Default to using the image if we can't analyze it
+            return True
+
+
     @property
     def pollo_client(self) -> PolloAIClient:
         """Lazy-initialize the Pollo client since some operations don't need it."""
@@ -507,6 +571,17 @@ class VideoClipManager:
                          aspect_ratio=aspect_ratio,
                          use_case_format=use_case.format,
                          model=clip.model_used or 'kling-1.6')
+            
+            # Check if image has plain/white background - if so, skip image-to-video
+            # Plain backgrounds cause the video to start with that background, creating bad transitions
+            use_image_for_video = True
+            if image_url:
+                use_image_for_video = self._should_use_image_for_video(image_url)
+                if not use_image_for_video:
+                    self._log_info('Image has plain/white background, using text-to-video instead',
+                                 clip_id=clip.id,
+                                 image_url=image_url[:100] + '...' if len(image_url) > 100 else image_url)
+                    image_url = None  # Don't pass image_url to Pollo
             
             # Create the video generation job
             webhook_url = self._build_webhook_url()
