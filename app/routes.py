@@ -2713,7 +2713,7 @@ def get_assembly_data(use_case_id):
 @main_bp.route('/api/use-cases/<int:use_case_id>/assemble', methods=['POST'])
 @login_required
 def assemble_final_video(use_case_id):
-    """Trigger final video assembly (Phase 8)."""
+    """Trigger final video assembly (Phase 8) - Async with fallback."""
     use_case = UseCase.query.get_or_404(use_case_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
 
@@ -2741,6 +2741,51 @@ def assemble_final_video(use_case_id):
     upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
     ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
 
+    # Check if Celery is available for async processing
+    from app import celery as celery_app
+    
+    if celery_app:
+        # Async processing via Celery
+        try:
+            from app.tasks.video_tasks import assemble_final_video_async
+            
+            options = {
+                'transition': transition,
+                'quality': quality,
+                'background_music': background_music,
+                'force_voiceover': force_voiceover,
+                'include_voiceover': include_voiceover,
+                'transition_duration': transition_duration,
+                'format_override': format_override,
+                'voiceover_path': data.get('voiceover_path')
+            }
+            
+            # Trigger async task
+            task = assemble_final_video_async.delay(
+                use_case_id=use_case_id,
+                script_id=script.id,
+                options=options
+            )
+            
+            current_app.logger.info(
+                f'Async assembly triggered: task_id={task.id}, use_case={use_case_id}'
+            )
+            
+            return jsonify({
+                'success': True,
+                'async': True,
+                'task_id': task.id,
+                'status': 'PENDING',
+                'message': 'Video assembly started in background. Poll for status.',
+                'poll_url': f'/api/use-cases/{use_case_id}/assembly-status/{task.id}'
+            })
+            
+        except Exception as e:
+            current_app.logger.error(f'Failed to trigger async assembly: {e}')
+            # Fall back to sync if Celery fails
+            current_app.logger.info('Falling back to synchronous assembly')
+    
+    # Synchronous processing (fallback)
     voiceover_path = data.get('voiceover_path')
     if include_voiceover:
         try:
@@ -2780,6 +2825,68 @@ def assemble_final_video(use_case_id):
         return jsonify(assembly_result), 500
 
     return jsonify(assembly_result)
+
+
+@main_bp.route('/api/use-cases/<int:use_case_id>/assembly-status/<task_id>', methods=['GET'])
+@login_required
+def get_assembly_status(use_case_id, task_id):
+    """Check the status of an async assembly job."""
+    from app import celery as celery_app
+    
+    if not celery_app:
+        return jsonify({
+            'success': False,
+            'error': 'Async processing not available'
+        }), 503
+    
+    try:
+        result = celery_app.AsyncResult(task_id)
+        
+        response = {
+            'task_id': task_id,
+            'status': result.status,
+            'success': result.successful() if result.ready() else None
+        }
+        
+        if result.status == 'PENDING':
+            response['message'] = 'Assembly is queued and waiting to start...'
+            response['progress'] = 0
+            
+        elif result.status == 'STARTED':
+            info = result.info or {}
+            response['message'] = info.get('message', 'Assembly in progress...')
+            response['progress'] = info.get('progress', 10)
+            response['step'] = info.get('step', 'initializing')
+            
+        elif result.status == 'PROGRESS':
+            info = result.info or {}
+            response['message'] = info.get('message', 'Processing...')
+            response['progress'] = info.get('progress', 50)
+            response['step'] = info.get('step', 'processing')
+            
+        elif result.ready():
+            if result.successful():
+                result_data = result.get()
+                response['success'] = True
+                response['message'] = 'Assembly complete!'
+                response['progress'] = 100
+                response['video_path'] = result_data.get('video_path')
+                response['duration'] = result_data.get('duration')
+                response['file_size'] = result_data.get('file_size')
+                response['final_video_id'] = result_data.get('final_video_id')
+            else:
+                response['success'] = False
+                response['message'] = 'Assembly failed'
+                response['error'] = str(result.result) if result.result else 'Unknown error'
+                
+        return jsonify(response)
+        
+    except Exception as e:
+        current_app.logger.error(f'Error checking assembly status: {e}')
+        return jsonify({
+            'success': False,
+            'error': f'Failed to check status: {str(e)}'
+        }), 500
 
 
 @main_bp.route('/api/use-cases/<int:use_case_id>/final-video', methods=['GET'])
