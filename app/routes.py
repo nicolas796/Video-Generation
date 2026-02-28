@@ -249,13 +249,17 @@ def get_dashboard_status():
         
         # Determine product stage based on use cases
         if not use_cases:
-            current_stage = 'scraped'
+            current_stage = 'spec'
             stage_label = 'Scraped - Needs Use Case'
-            progress_pct = 12.5  # 1/8 stages
+            progress_pct = 16.7  # 1/6 stages
             next_url = f"/use-case/{product.id}"
+            use_case_id = None
+            use_case_name = None
         else:
             # Get the most active use case
             use_case = use_cases[0]
+            use_case_id = use_case.id
+            use_case_name = use_case.name
             pipeline = PipelineProgressTracker.summarize(use_case)
             
             # Determine current stage from pipeline
@@ -271,16 +275,17 @@ def get_dashboard_status():
             if not current_pipeline_stage:
                 current_pipeline_stage = 'final_output'
             
-            # Map to UI stages
+            # Map pipeline stages to UI stages with correct URLs
+            # Stages: scrape(0) -> spec(16.7) -> usecase(33.3) -> script(50) -> video_gen(66.7) -> assembly(83.3) -> output(100)
             stage_mapping = {
-                'script': ('script', 'Script Generation', 37.5, f"/script/{use_case.id}"),
-                'clips': ('video_gen', 'Video Generation', 62.5, f"/video-gen/{use_case.id}"),
-                'analysis': ('video_gen', 'Clip Analysis', 62.5, f"/video-gen/{use_case.id}"),
-                'assembly': ('assembly', 'Video Assembly', 87.5, f"/assembly/{use_case.id}"),
-                'final_output': ('output', 'Final Output', 100, f"/output/{use_case.id}")
+                'script': ('script', 'Script Generation', 50.0, f"/script/{use_case.id}"),
+                'clips': ('video_gen', 'Video Generation', 66.7, f"/video-gen/{use_case.id}"),
+                'analysis': ('video_gen', 'Clip Analysis', 66.7, f"/video-gen/{use_case.id}"),
+                'assembly': ('assembly', 'Video Assembly', 83.3, f"/assembly/{use_case.id}"),
+                'final_output': ('output', 'Final Output', 100.0, f"/output/{use_case.id}")
             }
             
-            stage_info = stage_mapping.get(current_pipeline_stage, ('scraped', 'In Progress', 50, f"/use-case/{product.id}"))
+            stage_info = stage_mapping.get(current_pipeline_stage, ('usecase', 'Use Case Config', 33.3, f"/use-case/{product.id}"))
             current_stage = stage_info[0]
             stage_label = stage_info[1]
             progress_pct = stage_info[2]
@@ -288,10 +293,7 @@ def get_dashboard_status():
             
             # Check if this is an active/incomplete project
             script = Script.query.filter_by(use_case_id=use_case.id).first()
-            is_complete = (
-                pipeline['has_final_video'] or 
-                (script and script.status == 'approved' and pipeline['clip_stats'].get('complete', 0) > 0)
-            )
+            is_complete = pipeline['has_final_video']
             
             if not is_complete:
                 active_projects.append({
@@ -312,7 +314,9 @@ def get_dashboard_status():
             'stage_label': stage_label,
             'progress_pct': progress_pct,
             'next_url': next_url,
-            'use_case_count': len(use_cases)
+            'use_case_count': len(use_cases),
+            'use_case_id': use_case_id,
+            'use_case_name': use_case_name
         })
     
     # Calculate stats
@@ -324,6 +328,9 @@ def get_dashboard_status():
     # Get recent activity (last 5 products)
     recent_products = product_progress[:5]
     
+    # Get the most recent product for quick navigation
+    most_recent = product_progress[0] if product_progress else None
+    
     return jsonify({
         'success': True,
         'stats': {
@@ -334,7 +341,8 @@ def get_dashboard_status():
         },
         'active_projects': active_projects[:3],  # Top 3 active projects
         'recent_products': recent_products,
-        'has_active_projects': len(active_projects) > 0
+        'has_active_projects': len(active_projects) > 0,
+        'most_recent': most_recent  # For stage navigation
     })
 
 
@@ -351,6 +359,24 @@ def spec_sheet_page(product_id):
     """Spec sheet UI page."""
     product = Product.query.get_or_404(product_id)
     return render_template('spec_sheet.html', product=product)
+
+
+@main_bp.route('/products')
+@login_required
+def products_list_page():
+    """Products list UI page."""
+    products = Product.query.order_by(Product.created_at.desc()).all()
+    
+    # Enrich with use case count
+    products_data = []
+    for product in products:
+        use_case_count = UseCase.query.filter_by(product_id=product.id).count()
+        products_data.append({
+            'product': product,
+            'use_case_count': use_case_count
+        })
+    
+    return render_template('products_list.html', products_data=products_data)
 
 
 # ============================================================================
@@ -2613,6 +2639,7 @@ def get_assembly_data(use_case_id):
     total_duration = round(sum((clip.get('duration') or 0) for clip in ordered_clips), 2)
     target_duration = use_case.duration_target or 30
     variance = round(total_duration - target_duration, 2)
+    analyzed_count = len([clip for clip in ordered_clips if clip.get('content_description')])
     
     # Enhanced duration status with smart assembly info
     if total_duration < target_duration * 0.5:
@@ -2642,8 +2669,6 @@ def get_assembly_data(use_case_id):
         'has_enough_content': total_duration >= target_duration * 0.5
     }
 
-    analyzed_count = len([clip for clip in ordered_clips if clip.get('content_description')])
-    
     return jsonify({
         'success': True,
         'use_case': use_case.to_dict(),
