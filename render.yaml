@@ -7,7 +7,7 @@ services:
     
     # Build and start commands
     buildCommand: "./build.sh"
-    startCommand: "gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120"
+    startCommand: "gunicorn app:app --bind 0.0.0.0:$PORT --worker-class gevent --workers 2 --timeout 300 --keep-alive 5 --max-requests 1000"
     
     # Health check endpoint
     healthCheckPath: /health

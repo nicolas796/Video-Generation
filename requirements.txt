@@ -30,6 +30,7 @@ psycopg2-binary==2.9.9  # PostgreSQL adapter for production
 
 # Production WSGI Server
 gunicorn==21.2.0
+gevent==23.9.1  # For async worker handling of large file uploads
 
 # Static Files
 whitenoise==6.6.0  # For serving static files in production

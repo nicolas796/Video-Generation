@@ -2113,8 +2113,8 @@ def upload_video_clip(use_case_id):
     current_app.logger.info(f"Upload attempt for use_case {use_case_id}")
     current_app.logger.info(f"CLIP_UPLOAD_FOLDER: {current_app.config.get('CLIP_UPLOAD_FOLDER')}")
     current_app.logger.info(f"UPLOAD_FOLDER: {current_app.config.get('UPLOAD_FOLDER')}")
-    current_app.logger.info(f"File size: {len(file.read())} bytes")
-    file.seek(0)  # Reset file pointer after reading
+    current_app.logger.info(f"File name: {file.filename}")
+    # Don't read file content into memory - stream it instead
     
     try:
         # Get existing clips count for sequence order
