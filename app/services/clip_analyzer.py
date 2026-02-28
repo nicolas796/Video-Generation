@@ -119,9 +119,17 @@ class ClipAnalyzer:
         self,
         use_case_id: int,
         upload_folder: str = './uploads',
-        force: bool = False
+        force: bool = False,
+        max_clips: int = 3
     ) -> Dict[str, Any]:
-        """Analyze all complete clips for a use case."""
+        """Analyze complete clips for a use case (limited to prevent timeouts).
+        
+        Args:
+            use_case_id: ID of the use case
+            upload_folder: Base upload folder path
+            force: Whether to re-analyze already analyzed clips
+            max_clips: Maximum clips to analyze per call (default 3 to prevent timeouts)
+        """
         clips = VideoClip.query.filter_by(
             use_case_id=use_case_id,
             status='complete'
@@ -136,26 +144,45 @@ class ClipAnalyzer:
                 'failed': 0
             }
 
+        # Limit clips to analyze to prevent timeouts
+        # Prioritize clips that haven't been analyzed yet
+        unanalyzed_clips = [c for c in clips if not c.content_description or force]
+        clips_to_analyze = unanalyzed_clips[:max_clips]
+        
+        # If we need more to reach max_clips, add already-analyzed ones
+        if len(clips_to_analyze) < max_clips and force:
+            analyzed_clips = [c for c in clips if c.content_description]
+            remaining = max_clips - len(clips_to_analyze)
+            clips_to_analyze.extend(analyzed_clips[:remaining])
+
         results: List[Dict[str, Any]] = []
         analyzed = 0
         failed = 0
+        skipped = 0
 
-        for clip in clips:
+        for clip in clips_to_analyze:
             result = self.analyze_clip(clip, upload_folder, force=force)
             results.append(result)
 
             if result.get('success'):
                 if not result.get('skipped'):
                     analyzed += 1
+                else:
+                    skipped += 1
             else:
                 failed += 1
 
+        total_unanalyzed = len(unanalyzed_clips)
+        
         return {
             'success': failed == 0,
             'use_case_id': use_case_id,
             'total': len(clips),
             'analyzed': analyzed,
             'failed': failed,
+            'skipped': skipped,
+            'remaining': max(0, total_unanalyzed - analyzed),
+            'message': f'Analyzed {analyzed} clips. {max(0, total_unanalyzed - analyzed)} remaining.' if total_unanalyzed > max_clips else None,
             'results': results
         }
 
