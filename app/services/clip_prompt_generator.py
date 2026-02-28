@@ -384,7 +384,7 @@ Analyze the product image and create a prompt that:
 1. Uses the product's actual visual characteristics
 2. Matches the voiceover script's message
 3. Fits the {clip_type} role in the story arc
-4. Appeals to {target_audience}{f"\n5. Incorporates the scene context provided above" if scene_context_text else ""}
+4. Appeals to {target_audience}{"\n5. Incorporates the scene context provided above" if scene_context_text else ""}
 
 Return ONLY the JSON object with visual_prompt, motion_direction, and mood."""
 
