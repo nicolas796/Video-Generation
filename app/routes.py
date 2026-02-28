@@ -2731,7 +2731,15 @@ def get_final_video_info(use_case_id):
 
     data = final_video.to_dict()
     data['video_url'] = f"/uploads/{final_video.file_path}" if final_video.file_path else None
-    data['thumbnail_url'] = f"/uploads/{final_video.thumbnail_path}" if final_video.thumbnail_path else None
+    
+    # Only return thumbnail URL if the file actually exists
+    thumbnail_url = None
+    if final_video.thumbnail_path:
+        thumb_full_path = os.path.join(current_app.config['UPLOAD_FOLDER'], final_video.thumbnail_path)
+        if os.path.exists(thumb_full_path):
+            thumbnail_url = f"/uploads/{final_video.thumbnail_path}"
+    data['thumbnail_url'] = thumbnail_url
+    
     data['download_url'] = url_for('main.download_final_video', use_case_id=use_case_id)
 
     return jsonify({'success': True, 'final_video': data})

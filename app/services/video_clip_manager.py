@@ -510,6 +510,26 @@ class VideoClipManager:
                 webhook_url=webhook_url
             )
             
+            # Check if the error is due to invalid image - retry without image
+            if not result.get('success') and result.get('error'):
+                error_msg = result.get('error', '').lower()
+                if 'image pixel is invalid' in error_msg or 'invalid image' in error_msg:
+                    self._log_info('Image rejected by Pollo, retrying with text-only generation',
+                                 clip_id=clip.id,
+                                 original_error=result.get('error'))
+                    # Retry without image_url
+                    result = self.pollo_client.create_video_job(
+                        prompt=clip.prompt,
+                        model=clip.model_used or 'kling-1.6',
+                        aspect_ratio=use_case.format or '9:16',
+                        length=int(clip.duration) if clip.duration else 5,
+                        image_url=None,  # Retry without image
+                        webhook_url=webhook_url
+                    )
+                    if result.get('success'):
+                        self._log_info('Successfully generated clip with text-only fallback',
+                                     clip_id=clip.id)
+            
             if result.get('success'):
                 clip.pollo_job_id = result['task_id']
                 db.session.commit()
@@ -919,7 +939,12 @@ class VideoClipManager:
             data['video_url'] = None
         
         if clip.thumbnail_path:
-            data['thumbnail_url'] = f"/uploads/{clip.thumbnail_path}"
+            # Verify the thumbnail file actually exists before returning URL
+            thumb_full_path = os.path.join(self.upload_folder, clip.thumbnail_path)
+            if os.path.exists(thumb_full_path):
+                data['thumbnail_url'] = f"/uploads/{clip.thumbnail_path}"
+            else:
+                data['thumbnail_url'] = None
         else:
             data['thumbnail_url'] = None
         

@@ -1,7 +1,9 @@
 """Clip ordering engine that enforces narrative flow and visual variety."""
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from flask import current_app
 from app.models import UseCase, VideoClip
 
 
@@ -92,8 +94,19 @@ class ClipOrderingEngine:
         duration_target = use_case.duration_target if use_case and use_case.duration_target else 30
 
         recommendation = []
+        # Get upload folder path for verifying thumbnail existence
+        upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
+        
         for index, item in enumerate(optimized):
             clip = item.clip
+            
+            # Only return thumbnail URL if the file actually exists
+            thumbnail_url = None
+            if clip.thumbnail_path:
+                thumb_path = os.path.join(upload_folder, clip.thumbnail_path)
+                if os.path.exists(thumb_path):
+                    thumbnail_url = f"/uploads/{clip.thumbnail_path}"
+            
             recommendation.append({
                 'clip_id': clip.id,
                 'sequence_order': index,
@@ -101,7 +114,7 @@ class ClipOrderingEngine:
                 'content_type': item.content_type,
                 'duration': clip.duration or 5,
                 'tags': clip.tags or [],
-                'thumbnail_url': f"/uploads/{clip.thumbnail_path}" if clip.thumbnail_path else None,
+                'thumbnail_url': thumbnail_url,
                 'description': self._truncate(clip.content_description),
                 'reasoning': item.reasoning,
                 'analysis': clip.analysis_metadata or {}
