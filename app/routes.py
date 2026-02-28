@@ -1409,7 +1409,19 @@ def generate_scene_image(use_case_id):
         if not api_key:
             return jsonify({'success': False, 'error': 'OpenAI API key not configured'}), 500
         
-        client = openai.OpenAI(api_key=api_key)
+        # Create client without any proxy settings to avoid httpx compatibility issues
+        # httpx 0.28+ changed 'proxies' to 'proxy' which breaks some openai client versions
+        http_client = None
+        try:
+            import httpx
+            http_client = httpx.Client(timeout=60.0, follow_redirects=True)
+        except Exception:
+            pass  # Fallback to default client if httpx import fails
+        
+        if http_client:
+            client = openai.OpenAI(api_key=api_key, http_client=http_client)
+        else:
+            client = openai.OpenAI(api_key=api_key)
         
         current_app.logger.info(f'Generating scene image for use case {use_case_id}', 
                                prompt_preview=scene_prompt[:100])
