@@ -955,7 +955,8 @@ function updateStats(stats) {
     }
 }
 
-let selectedImageFilename = null;
+let selectedImageUrl = null;
+let availableImages = [];
 
 // Open image selection modal when clicking generate
 async function startGeneration() {
@@ -974,13 +975,19 @@ async function loadProductImages() {
         const grid = document.getElementById('productImagesGrid');
         const noImagesMsg = document.getElementById('noImagesMessage');
         
+        // Store available images for lookup
+        availableImages = data.images || [];
+        
         if (data.success && data.images.length > 0) {
-            grid.innerHTML = data.images.map(img => `
+            grid.innerHTML = data.images.map((img, index) => `
                 <div class="col-md-4 col-6">
-                    <div class="card image-select-card" onclick="selectImage('${img.filename}', this)">
-                        <img src="${img.url}" class="card-img-top" alt="Product image">
+                    <div class="card image-select-card ${img.pollo_compatible ? '' : 'opacity-75'}" onclick="selectImage(${index}, this)">
+                        <img src="${img.url}" class="card-img-top" alt="Product image" style="height: 120px; object-fit: cover;">
                         <div class="card-body p-2 text-center">
-                            <small class="text-muted">Click to select</small>
+                            ${img.pollo_compatible 
+                                ? '<span class="badge bg-success mb-1">Video Ready</span>' 
+                                : '<span class="badge bg-secondary mb-1">Display Only</span>'}
+                            <br><small class="text-muted">Click to select</small>
                         </div>
                     </div>
                 </div>
@@ -1004,8 +1011,18 @@ function getClipCountToGenerate() {
     return range ? parseInt(range.value) : 1;
 }
 
-function selectImage(filename, cardElement) {
-    selectedImageFilename = filename;
+function selectImage(imageIndex, cardElement) {
+    const selectedImage = availableImages[imageIndex];
+    if (!selectedImage) return;
+    
+    // For video generation, we need the public/remote URL (pollo_compatible)
+    // If user selected a local image, we can't use it for Pollo.ai
+    if (!selectedImage.pollo_compatible) {
+        alert('This image is stored locally and cannot be used for video generation. Please use a remote product image (from the original source) or generate a scene image instead.');
+        return;
+    }
+    
+    selectedImageUrl = selectedImage.url;
     
     // Remove selection from all cards
     document.querySelectorAll('.image-select-card').forEach(card => {
@@ -1022,35 +1039,37 @@ function selectImage(filename, cardElement) {
     const modal = bootstrap.Modal.getInstance(document.getElementById('imageSelectModal'));
     modal.hide();
     
-    // Start generation with selected image and count
-    startGenerationWithImage(filename, clipCount);
+    // Start generation with selected image URL and count
+    startGenerationWithImage(selectedImageUrl, clipCount);
 }
 
 function startGenerationWithoutImage() {
-    selectedImageFilename = null;
+    selectedImageUrl = null;
     const clipCount = getClipCountToGenerate();
     const modal = bootstrap.Modal.getInstance(document.getElementById('imageSelectModal'));
     modal.hide();
     startGenerationWithImage(null, clipCount);
 }
 
-async function startGenerationWithImage(imageFilename, clipCount = 1) {
+async function startGenerationWithImage(imageUrl, clipCount = 1) {
     document.getElementById('generateSection').classList.add('d-none');
     document.getElementById('generatingSection').classList.remove('d-none');
     
     const clipText = clipCount === 1 ? 'clip' : 'clips';
-    document.getElementById('generatingStatus').textContent = imageFilename 
+    document.getElementById('generatingStatus').textContent = imageUrl 
         ? `Starting generation of ${clipCount} ${clipText} with product image...`
         : `Starting generation of ${clipCount} ${clipText} (text only)...`;
     
     try {
+        const requestBody = { count: clipCount };
+        if (imageUrl) {
+            requestBody.selected_image_url = imageUrl;
+        }
+        
         const response = await fetch(`/api/use-cases/${useCaseId}/generate-clips`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
-            body: JSON.stringify({ 
-                selected_image: imageFilename,
-                count: clipCount
-            })
+            body: JSON.stringify(requestBody)
         });
         
         const data = await response.json();

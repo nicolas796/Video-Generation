@@ -91,6 +91,44 @@ class VideoClipManager:
             return base_url.rstrip('/') + '/webhooks/pollo'
         return None
     
+    def _ensure_public_url(self, url: Optional[str]) -> Optional[str]:
+        """Convert relative URLs (like /uploads/...) into fully qualified URLs."""
+        if not url:
+            return None
+
+        cleaned = url.strip()
+        if not cleaned:
+            return None
+
+        if cleaned.startswith(('http://', 'https://')):
+            return cleaned
+
+        base_url = None
+        try:
+            if current_app:
+                base_url = (
+                    current_app.config.get('EXTERNAL_BASE_URL')
+                    or current_app.config.get('APP_BASE_URL')
+                    or current_app.config.get('PUBLIC_BASE_URL')
+                )
+        except RuntimeError:
+            base_url = None
+
+        if not base_url:
+            base_url = (
+                os.getenv('EXTERNAL_BASE_URL')
+                or os.getenv('APP_BASE_URL')
+                or os.getenv('PUBLIC_BASE_URL')
+            )
+
+        if not base_url:
+            return None
+
+        if cleaned.startswith('/'):
+            return base_url.rstrip('/') + cleaned
+
+        return f"{base_url.rstrip('/')}/{cleaned.lstrip('/')}"
+
     @property
     def pollo_client(self) -> PolloAIClient:
         """Lazy-initialize the Pollo client since some operations don't need it."""
@@ -409,7 +447,14 @@ class VideoClipManager:
         
         return clip
     
-    def start_generation(self, clip_id: int, image_url: Optional[str] = None) -> Dict[str, Any]:
+    def start_generation(
+        self,
+        clip_id: int,
+        image_url: Optional[str] = None,
+        *,
+        allow_auto_image: bool = True,
+        image_source: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Start video generation for a clip.
         
         Args:

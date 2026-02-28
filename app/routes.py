@@ -209,7 +209,7 @@ def _generate_clip_thumbnail(video_path: str, use_case_id: int, clip_id: int, up
         return None
     thumb_folder = os.path.join(upload_root, 'clips', str(use_case_id), 'thumbnails')
     os.makedirs(thumb_folder, exist_ok=True)
-    thumb_filename = f"clip_{clip_id}.jpg"
+    thumb_filename = f"clip_{clip_id:03d}_thumb.jpg"
     thumb_path = os.path.join(thumb_folder, thumb_filename)
     height, width = frame.shape[:2]
     max_width = 480
@@ -1346,22 +1346,29 @@ def get_product_images(product_id):
     product_folder = os.path.join(upload_folder, 'products', str(product_id))
     images = []
     
-    # First try local images
+    # Priority: Return remote/public URLs first (these work with Pollo.ai)
+    if product.images:
+        for i, img_url in enumerate(product.images[:10]):
+            images.append({
+                'filename': f"product_image_{i+1:02d}.jpg",
+                'url': img_url,
+                'source': 'remote',
+                'pollo_compatible': True  # Public URLs work with Pollo.ai
+            })
+    
+    # Also include local images for preview/display purposes
     if os.path.exists(product_folder):
         for filename in sorted(os.listdir(product_folder)):
             if filename.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                images.append({
-                    'filename': filename,
-                    'url': f"/uploads/products/{product_id}/{filename}"
-                })
-    
-    # If no local images, fall back to remote URLs stored in product.images
-    if not images and product.images:
-        for i, img_url in enumerate(product.images[:10]):
-            images.append({
-                'filename': f"remote_image_{i+1:02d}.jpg",
-                'url': img_url
-            })
+                local_url = f"/uploads/products/{product_id}/{filename}"
+                # Only add if not already in list (check by filename)
+                if not any(img.get('filename') == filename for img in images):
+                    images.append({
+                        'filename': filename,
+                        'url': local_url,
+                        'source': 'local',
+                        'pollo_compatible': False  # Local paths don't work with Pollo.ai
+                    })
     
     return jsonify({
         'success': True,
@@ -1596,24 +1603,34 @@ def generate_video_clips(use_case_id):
             clip_type = clip_config['clip_type']
             
             # Get the image URL for this clip
-            # Priority: 1) Generated scene URL, 2) Product images from scraping
+            # Priority: 1) User-selected product image URL, 2) Generated scene URL, 3) Auto-selected product image
             image_url = None
             
-            # Check if user provided a generated scene URL
-            generated_scene_url = data.get('generated_scene_url')
-            if generated_scene_url:
-                # For local files, we need to construct the full URL for Pollo.ai
-                if generated_scene_url.startswith('/uploads/'):
-                    external_base = os.getenv('EXTERNAL_BASE_URL', '')
-                    if external_base:
-                        image_url = external_base.rstrip('/') + generated_scene_url
-                    else:
-                        # Try to construct from request host
-                        image_url = generated_scene_url
-                else:
-                    image_url = generated_scene_url
+            # Check if user selected a specific product image URL
+            selected_image_url = data.get('selected_image_url')
+            if selected_image_url:
+                # Use the remote/public URL directly (must be http/https for Pollo.ai)
+                if selected_image_url.startswith(('http://', 'https://')):
+                    image_url = selected_image_url
+                    current_app.logger.info(f'Using user-selected image URL for clip {clip_index}', 
+                                          image_url=image_url[:100] + '...' if len(image_url) > 100 else image_url)
             
-            # Fall back to product images if no generated scene
+            # Check if user provided a generated scene URL
+            if not image_url:
+                generated_scene_url = data.get('generated_scene_url')
+                if generated_scene_url:
+                    # For local files, we need to construct the full URL for Pollo.ai
+                    if generated_scene_url.startswith('/uploads/'):
+                        external_base = os.getenv('EXTERNAL_BASE_URL', '')
+                        if external_base:
+                            image_url = external_base.rstrip('/') + generated_scene_url
+                        else:
+                            # Try to construct from request host
+                            image_url = generated_scene_url
+                    else:
+                        image_url = generated_scene_url
+            
+            # Fall back to product images if no image selected yet
             if not image_url and product.images:
                 if isinstance(product.images, list) and len(product.images) > 0:
                     image_index = clip_index % len(product.images)
