@@ -255,14 +255,21 @@ class ClipAnalyzer:
 
         return frames[:3]
 
-    def _extract_video_frames(self, video_path: str, max_frames: int = 3) -> List[str]:
+    def _extract_video_frames(self, video_path: str, max_frames: int = 1) -> List[str]:
+        """Extract frames from video for AI analysis.
+        
+        Default is 1 frame (middle of video) to reduce API cost and timeout risk.
+        Increase max_frames if you need more temporal context.
+        """
         frames: List[str] = []
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             return frames
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
-        positions = [0.15, 0.5, 0.85][:max_frames]
+        # Use middle frame only by default (50% mark) - best representative frame
+        # Reduces API tokens and prevents timeouts
+        positions = [0.5][:max_frames]
 
         for position in positions:
             frame_index = int(total_frames * position)
@@ -283,7 +290,17 @@ class ClipAnalyzer:
             return base64.b64encode(file.read()).decode('utf-8')
 
     def _encode_frame(self, frame) -> Optional[str]:
-        success, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        # Resize large frames to reduce API payload size and prevent timeouts
+        max_dimension = 720  # Max width or height
+        h, w = frame.shape[:2]
+        if max(h, w) > max_dimension:
+            scale = max_dimension / max(h, w)
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        
+        # Lower quality for faster uploads (60 instead of 80)
+        success, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
         if not success:
             return None
         return base64.b64encode(buffer.tobytes()).decode('utf-8')
