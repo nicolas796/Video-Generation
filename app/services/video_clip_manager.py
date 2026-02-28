@@ -129,41 +129,95 @@ class VideoClipManager:
 
         return f"{base_url.rstrip('/')}/{cleaned.lstrip('/')}"
 
-    def _should_use_image_for_video(self, image_url: str) -> bool:
-        """Check if an image should be used for image-to-video generation.
+    def _prepare_image_for_video(self, image_url: str, clip_id: int) -> Optional[str]:
+        """Prepare an image for image-to-video generation.
         
-        Images with plain white/transparent backgrounds create poor transitions
-        because the video starts with that background. This detects such images.
+        Detects white/plain backgrounds and removes them so the product can be
+        naturally composited into scenes by the AI video model.
         
         Args:
             image_url: URL or path to the image
+            clip_id: ID of the clip (for naming processed files)
             
         Returns:
-            True if image should be used for image-to-video, False for text-to-video
+            Path to processed image (local path), or None if processing fails
         """
         try:
+            from PIL import Image
+            import io
+            import numpy as np
+            
             # Download or load the image
             if image_url.startswith(('http://', 'https://')):
                 response = requests.get(image_url, timeout=10)
                 response.raise_for_status()
-                import numpy as np
-                from PIL import Image
-                import io
                 img = Image.open(io.BytesIO(response.content))
             else:
                 # Local path
-                from PIL import Image
-                if not os.path.isabs(image_url):
-                    image_url = os.path.join(self.upload_folder, image_url.lstrip('/'))
-                img = Image.open(image_url)
+                local_path = image_url
+                if not os.path.isabs(local_path):
+                    local_path = os.path.join(self.upload_folder, local_path.lstrip('/'))
+                img = Image.open(local_path)
+            
+            # Check if image has white/plain background
+            has_white_bg = self._detect_white_background(img)
+            
+            if has_white_bg:
+                self._log_info('Image has white background, removing it for better video generation',
+                             clip_id=clip_id)
+                
+                # Remove background using rembg
+                from rembg import remove
+                
+                # Remove background (returns RGBA image)
+                output_img = remove(img)
+                
+                # Save processed image to clips folder
+                processed_folder = os.path.join(self.clips_folder, 'processed')
+                os.makedirs(processed_folder, exist_ok=True)
+                
+                processed_path = os.path.join(processed_folder, f'clip_{clip_id}_nobg.png')
+                output_img.save(processed_path, 'PNG')
+                
+                self._log_info(f'Background removed, saved to {processed_path}',
+                             clip_id=clip_id)
+                
+                # Convert to full public URL for Pollo.ai
+                rel_path = os.path.relpath(processed_path, self.upload_folder)
+                full_url = self._ensure_public_url(f'/uploads/{rel_path}')
+                return full_url
+            else:
+                # Image has natural background, use as-is
+                self._log_info('Image has natural background, using as-is',
+                             clip_id=clip_id)
+                return None  # Signal to use original image_url
+                
+        except Exception as e:
+            self._log_error(f'Failed to prepare image for video: {e}',
+                          clip_id=clip_id)
+            # Fall back to original image
+            return None
+    
+    def _detect_white_background(self, img: Image.Image) -> bool:
+        """Detect if an image has a white/plain background.
+        
+        Args:
+            img: PIL Image
+            
+        Returns:
+            True if image has white/plain background (>80% white border)
+        """
+        try:
+            import numpy as np
             
             # Convert to RGB if necessary
             if img.mode in ('RGBA', 'P'):
-                img = img.convert('RGB')
+                img_rgb = img.convert('RGB')
+            else:
+                img_rgb = img
             
             # Convert to numpy array
-            import numpy as np
-            img_array = np.array(img)
+            img_array = np.array(img_rgb)
             
             # Get border pixels (edges of the image)
             h, w = img_array.shape[:2]
@@ -180,17 +234,11 @@ class VideoClipManager:
             white_pixels = np.all(border_pixels >= white_threshold, axis=1)
             white_percentage = np.sum(white_pixels) / len(border_pixels)
             
-            # If >80% of border is white, likely a product on white background
-            if white_percentage > 0.80:
-                self._log_info(f'Image has {white_percentage:.1%} white border, skipping image-to-video')
-                return False
-            
-            return True
+            return white_percentage > 0.80
             
         except Exception as e:
-            self._log_error(f'Failed to analyze image background: {e}')
-            # Default to using the image if we can't analyze it
-            return True
+            self._log_error(f'Failed to detect white background: {e}')
+            return False
 
 
     @property
@@ -572,16 +620,18 @@ class VideoClipManager:
                          use_case_format=use_case.format,
                          model=clip.model_used or 'kling-1.6')
             
-            # Check if image has plain/white background - if so, skip image-to-video
+            # Check if image has plain/white background - if so, remove it
             # Plain backgrounds cause the video to start with that background, creating bad transitions
-            use_image_for_video = True
+            # Removing the background gives AI a clean product cutout to work with
+            processed_image_url = None
             if image_url:
-                use_image_for_video = self._should_use_image_for_video(image_url)
-                if not use_image_for_video:
-                    self._log_info('Image has plain/white background, using text-to-video instead',
+                processed_image_url = self._prepare_image_for_video(image_url, clip.id)
+                if processed_image_url:
+                    # Use the background-removed version (full public URL)
+                    image_url = processed_image_url
+                    self._log_info('Using background-removed image for video',
                                  clip_id=clip.id,
                                  image_url=image_url[:100] + '...' if len(image_url) > 100 else image_url)
-                    image_url = None  # Don't pass image_url to Pollo
             
             # Create the video generation job
             webhook_url = self._build_webhook_url()
