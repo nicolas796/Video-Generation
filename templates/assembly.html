@@ -72,14 +72,18 @@
             <div class="d-flex justify-content-between"><span class="text-muted small">Target Duration</span><span class="small fw-medium">{{ use_case.duration_target }}s</span></div>
         </div>
         <div class="content-card mb-4">
-            <h6 class="mb-3"><i class="bi bi-graph-up me-2"></i>Clip Status</h6>
+            <h6 class="mb-3"><i class="bi bi-graph-up me-2"></i>Content Status</h6>
             <div class="d-flex justify-content-between mb-2"><span class="text-muted small">Total Clips</span><span class="small fw-medium" id="totalClips">-</span></div>
             <div class="d-flex justify-content-between mb-2"><span class="text-muted small">Complete</span><span class="small fw-medium text-success" id="completeClips">-</span></div>
             <div class="d-flex justify-content-between mb-2"><span class="text-muted small">Analyzed</span><span class="small fw-medium text-primary" id="analyzedClips">-</span></div>
-            <div class="d-flex justify-content-between mb-2"><span class="text-muted small">Duration</span><span class="small fw-medium" id="totalDuration">-</span></div>
+            <div class="d-flex justify-content-between mb-2"><span class="text-muted small">Total Duration</span><span class="small fw-medium" id="totalDuration">-</span></div>
             <div class="mt-2">
                 <div class="duration-progress-bar"><div class="duration-progress-fill" id="durationProgress" style="width: 0%"></div></div>
-                <small class="text-muted mt-1 d-block" id="durationStatus">–</small>
+                <small class="mt-1 d-block" id="durationStatus">–</small>
+            </div>
+            <div class="mt-3 p-2 bg-light rounded small" id="smartAssemblyInfo">
+                <i class="bi bi-stars text-primary me-1"></i>
+                <span class="text-muted">AI will intelligently select and trim the best segments</span>
             </div>
         </div>
         <div class="content-card">
@@ -186,8 +190,13 @@ async function loadAssemblyData() {
         const data = await response.json();
         if (!data.success) throw new Error(data.error || 'Unable to load assembly data');
         clipsData = (data.clips || []).sort((a, b) => (a.sequence_order || 0) - (b.sequence_order || 0));
-        assemblyStats = data.stats || {}; analysisSummary = data.analysis_summary || analysisSummary;
-        updateStats(data.duration_summary); renderTimeline(); renderClipsGrid(); updateButtons();
+        assemblyStats = data.stats || {}; 
+        analysisSummary = data.analysis_summary || analysisSummary;
+        assemblyReady = data.assembly_ready || false;
+        updateStats(data.duration_summary); 
+        renderTimeline(); 
+        renderClipsGrid(); 
+        updateButtons();
     } catch (error) { console.error(error); }
 }
 
@@ -195,19 +204,51 @@ function updateStats(durationSummary) {
     const total = analysisSummary.total || clipsData.length, complete = analysisSummary.complete || 0, analyzed = analysisSummary.analyzed || 0;
     const duration = durationSummary?.current || clipsData.reduce((sum, clip) => sum + (clip.duration || 0), 0);
     document.getElementById('totalClips').textContent = total; document.getElementById('completeClips').textContent = complete;
-    document.getElementById('analyzedClips').textContent = analyzed; document.getElementById('totalDuration').textContent = `${duration.toFixed(1)}s / ${targetDuration}s`;
+    document.getElementById('analyzedClips').textContent = analyzed; document.getElementById('totalDuration').textContent = `${duration.toFixed(1)}s / ${targetDuration}s target`;
     document.getElementById('timelineEnd').textContent = `${duration.toFixed(0)}s`;
+    
+    // Progress bar shows how much content we have relative to target
     const progress = targetDuration ? Math.min((duration / targetDuration) * 100, 100) : 0;
-    document.getElementById('durationProgress').style.width = `${progress}%`;
+    const progressBar = document.getElementById('durationProgress');
+    progressBar.style.width = `${progress}%`;
+    
+    // Color code the progress bar based on status
+    progressBar.className = 'duration-progress-fill';
+    if (durationSummary?.status === 'insufficient') {
+        progressBar.style.background = '#dc3545';  // Red
+    } else if (durationSummary?.status === 'warning') {
+        progressBar.style.background = '#ffc107';  // Yellow
+    } else if (durationSummary?.status === 'good' || durationSummary?.status === 'success') {
+        progressBar.style.background = '#198754';  // Green
+    } else {
+        progressBar.style.background = '#6c757d';  // Gray
+    }
+    
     const durationStatus = document.getElementById('durationStatus');
-    if (durationSummary) { durationStatus.textContent = durationSummary.message; durationStatus.className = `small mt-1 d-block ${durationSummary.status === 'warning' ? 'text-warning' : durationSummary.status === 'info' ? 'text-info' : 'text-muted'}`; }
+    if (durationSummary) { 
+        durationStatus.textContent = durationSummary.message; 
+        // Set color based on status
+        if (durationSummary.status === 'insufficient') {
+            durationStatus.className = 'small mt-1 d-block text-danger fw-bold';
+        } else if (durationSummary.status === 'warning') {
+            durationStatus.className = 'small mt-1 d-block text-warning';
+        } else if (durationSummary.status === 'good') {
+            durationStatus.className = 'small mt-1 d-block text-success';
+        } else {
+            durationStatus.className = 'small mt-1 d-block text-success';
+        }
+    }
     else { durationStatus.textContent = '–'; durationStatus.className = 'text-muted small mt-1 d-block'; }
 }
 
+let assemblyReady = false;
+
 function updateButtons() {
     const complete = analysisSummary.complete || 0, analyzed = analysisSummary.analyzed || 0;
-    document.getElementById('analyzeBtn').disabled = complete === 0; document.getElementById('autoOrderBtn').disabled = analyzed === 0;
-    document.getElementById('optimizeBtn').disabled = analyzed === 0; document.getElementById('renderBtn').disabled = !assemblyStats?.is_complete;
+    document.getElementById('analyzeBtn').disabled = complete === 0; 
+    document.getElementById('autoOrderBtn').disabled = analyzed === 0;
+    document.getElementById('optimizeBtn').disabled = analyzed === 0; 
+    document.getElementById('renderBtn').disabled = !assemblyReady;
 }
 
 function renderTimeline() {

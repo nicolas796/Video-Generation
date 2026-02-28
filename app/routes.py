@@ -21,6 +21,7 @@ from app.services.clip_analyzer import ClipAnalyzer
 from app.services.clip_ordering import ClipOrderingEngine
 from app.services.voiceover import VoiceoverGenerator
 from app.services.video_assembly import VideoAssembler
+from app.services.smart_assembly import SmartVideoAssembler
 from app.services.pipeline_progress import PipelineProgressTracker, PipelineRecoveryService
 
 import cv2
@@ -2612,23 +2613,33 @@ def get_assembly_data(use_case_id):
     total_duration = round(sum((clip.get('duration') or 0) for clip in ordered_clips), 2)
     target_duration = use_case.duration_target or 30
     variance = round(total_duration - target_duration, 2)
-
-    if variance > 5:
+    
+    # Enhanced duration status with smart assembly info
+    if total_duration < target_duration * 0.5:
+        duration_status = 'insufficient'
+        duration_message = f'Need {(target_duration - total_duration):.1f}s more content ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
+        assembly_ready = False
+    elif total_duration < target_duration * 0.8:
         duration_status = 'warning'
-        duration_message = f"+{variance}s over target"
-    elif variance < -5:
-        duration_status = 'info'
-        duration_message = f"{abs(variance)}s under target"
+        duration_message = f'Could use {(target_duration - total_duration):.1f}s more ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
+        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
+    elif variance > 5:
+        duration_status = 'good'
+        duration_message = f'{len(ordered_clips)} clips, {total_duration:.1f}s total - AI will select best segments'
+        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
     else:
         duration_status = 'success'
-        duration_message = 'Within target range'
+        duration_message = f'{len(ordered_clips)} clips, {total_duration:.1f}s total - Ready to assemble'
+        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
 
     duration_summary = {
         'current': total_duration,
         'target': target_duration,
         'variance': variance,
         'status': duration_status,
-        'message': duration_message
+        'message': duration_message,
+        'clip_count': len(ordered_clips),
+        'has_enough_content': total_duration >= target_duration * 0.5
     }
 
     analyzed_count = len([clip for clip in ordered_clips if clip.get('content_description')])
@@ -2647,7 +2658,13 @@ def get_assembly_data(use_case_id):
             'complete': stats.get('complete', 0),
             'analyzed': analyzed_count
         },
-        'assembly_ready': stats.get('is_complete', False) and analyzed_count > 0
+        'assembly_ready': assembly_ready,
+        'smart_assembly': {
+            'enabled': True,
+            'strategy': 'intelligent_selection_and_trimming',
+            'no_clip_limit': True,
+            'ai_segment_selection': True
+        }
     })
 
 
@@ -2705,8 +2722,9 @@ def assemble_final_video(use_case_id):
                 return jsonify(voiceover_result), status_code
             voiceover_path = voiceover_result['file_path']
 
-    assembler = VideoAssembler(upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
-    assembly_result = assembler.assemble_use_case(
+    # Use Smart Assembler for intelligent clip selection and trimming
+    assembler = SmartVideoAssembler(upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
+    assembly_result = assembler.assemble_use_case_smart(
         use_case=use_case,
         script=script,
         audio_relative_path=voiceover_path,
