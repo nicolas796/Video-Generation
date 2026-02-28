@@ -110,6 +110,16 @@ class Config:
         or 'http://localhost:5000'
     )
     
+    # Celery / Redis Configuration
+    CELERY_BROKER_URL = os.getenv(
+        'CELERY_BROKER_URL',
+        os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    )
+    CELERY_RESULT_BACKEND = os.getenv(
+        'CELERY_RESULT_BACKEND',
+        os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    )
+    
     # ElevenLabs default voice
     DEFAULT_VOICE_ID = os.getenv('DEFAULT_VOICE_ID', 'XB0fDUnXU5powFXDhCwa')
 

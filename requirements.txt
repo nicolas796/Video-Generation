@@ -39,3 +39,7 @@ whitenoise==6.6.0  # For serving static files in production
 # Additional utilities
 Werkzeug==3.0.1
 click==8.1.7
+
+# Async Task Processing (Celery + Redis)
+celery[redis]==5.3.6
+redis==5.0.1

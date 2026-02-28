@@ -9,6 +9,9 @@ db = SQLAlchemy()
 migrate = Migrate()
 csrf = CSRFProtect()
 
+# Celery instance (initialized with app in create_app)
+celery = None
+
 def create_app(config_name='default'):
     """Application factory pattern."""
     import os
@@ -28,6 +31,16 @@ def create_app(config_name='default'):
     db.init_app(app)
     migrate.init_app(app, db)
     csrf.init_app(app)
+    
+    # Initialize Celery with Flask app context
+    try:
+        from app.celery_app import make_celery
+        global celery
+        celery = make_celery(app)
+        app.logger.info("Celery initialized successfully")
+    except Exception as e:
+        app.logger.warning(f"Celery initialization failed (async tasks unavailable): {e}")
+        celery = None
     
     # Initialize WhiteNoise for static files in production
     if app.config['FLASK_ENV'] == 'production':
