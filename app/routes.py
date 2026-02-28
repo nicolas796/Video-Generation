@@ -2109,18 +2109,35 @@ def upload_video_clip(use_case_id):
     
     clip_type = request.form.get('clip_type', 'custom')
     
+    # Debug logging for Render disk issues
+    current_app.logger.info(f"Upload attempt for use_case {use_case_id}")
+    current_app.logger.info(f"CLIP_UPLOAD_FOLDER: {current_app.config.get('CLIP_UPLOAD_FOLDER')}")
+    current_app.logger.info(f"UPLOAD_FOLDER: {current_app.config.get('UPLOAD_FOLDER')}")
+    current_app.logger.info(f"File size: {len(file.read())} bytes")
+    file.seek(0)  # Reset file pointer after reading
+    
     try:
         # Get existing clips count for sequence order
         existing_clips = VideoClip.query.filter_by(use_case_id=use_case_id).count()
         
         # Create clip folder with safe path
-        clip_folder = safe_join(
-            current_app.config['CLIP_UPLOAD_FOLDER'],
-            str(use_case_id)
-        )
+        clip_upload_folder = current_app.config['CLIP_UPLOAD_FOLDER']
+        clip_folder = safe_join(clip_upload_folder, str(use_case_id))
+        
+        current_app.logger.info(f"clip_folder resolved to: {clip_folder}")
+        
         if not clip_folder:
-            return jsonify({'error': 'Invalid use case ID'}), 400
+            current_app.logger.error(f"safe_join returned None for base={clip_upload_folder}, use_case={use_case_id}")
+            return jsonify({'error': 'Invalid upload path configuration'}), 500
+            
+        # Ensure parent directory exists
+        os.makedirs(clip_upload_folder, exist_ok=True)
         os.makedirs(clip_folder, exist_ok=True)
+        
+        # Check if directory is writable
+        if not os.access(clip_folder, os.W_OK):
+            current_app.logger.error(f"Directory not writable: {clip_folder}")
+            return jsonify({'error': 'Upload directory is not writable'}), 500
         
         # Save the uploaded file with secure filename
         original_filename = secure_filename(file.filename)

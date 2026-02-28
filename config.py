@@ -88,7 +88,7 @@ class Config:
     # Upload paths
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
     UPLOAD_FOLDER = get_upload_folder()
-    MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
+    MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB max file size (matches frontend)
     
     # Product uploads
     PRODUCT_UPLOAD_FOLDER = os.path.join(UPLOAD_FOLDER, 'products')
