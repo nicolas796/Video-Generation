@@ -632,14 +632,25 @@
                 <!-- Step 2: Select Scene Context -->
                 <div class="mb-4">
                     <label class="form-label fw-medium">2. Select Scene Context</label>
-                    <p class="text-muted small mb-2">Choose where your product should appear. AI Suggested analyzes your product specs.</p>
+                    <p class="text-muted small mb-2">Choose where your product should appear. The AI will animate your product image in this context.</p>
                     <div id="sceneTemplatesGrid" class="row g-2">
+                        <!-- No Scene - Focus on Product -->
+                        <div class="col-4">
+                            <div class="card scene-template-card h-100 border-primary" onclick="selectSceneTemplate('none', this)" data-template="none">
+                                <div class="card-body p-2 text-center">
+                                    <i class="bi bi-box text-primary fs-4 mb-1"></i>
+                                    <h6 class="card-title mb-0 xsmall fw-bold">No Scene</h6>
+                                    <p class="text-muted xxsmall mb-0">Focus on product</p>
+                                </div>
+                            </div>
+                        </div>
                         <!-- AI Suggested Scene -->
                         <div class="col-4">
-                            <div class="card scene-template-card h-100 border-primary" onclick="selectSceneTemplate('ai-suggested', this)" data-template="ai-suggested">
+                            <div class="card scene-template-card h-100" onclick="selectSceneTemplate('ai-suggested', this)" data-template="ai-suggested">
                                 <div class="card-body p-2 text-center">
-                                    <i class="bi bi-stars text-primary fs-4 mb-1"></i>
-                                    <h6 class="card-title mb-0 xsmall fw-bold">AI Suggested</h6>
+                                    <i class="bi bi-stars text-secondary fs-4 mb-1"></i>
+                                    <h6 class="card-title mb-0 xsmall">AI Suggested</h6>
+                                    <p class="text-muted xxsmall mb-0">Based on specs</p>
                                 </div>
                             </div>
                         </div>
@@ -649,6 +660,7 @@
                                 <div class="card-body p-2 text-center">
                                     <i class="bi bi-cup-hot text-secondary fs-4 mb-1"></i>
                                     <h6 class="card-title mb-0 xsmall">Kitchen</h6>
+                                    <p class="text-muted xxsmall mb-0">Domestic setting</p>
                                 </div>
                             </div>
                         </div>
@@ -658,6 +670,7 @@
                                 <div class="card-body p-2 text-center">
                                     <i class="bi bi-droplet text-secondary fs-4 mb-1"></i>
                                     <h6 class="card-title mb-0 xsmall">Beauty</h6>
+                                    <p class="text-muted xxsmall mb-0">Spa/bathroom</p>
                                 </div>
                             </div>
                         </div>
@@ -667,6 +680,7 @@
                                 <div class="card-body p-2 text-center">
                                     <i class="bi bi-sun text-secondary fs-4 mb-1"></i>
                                     <h6 class="card-title mb-0 xsmall">Outdoor</h6>
+                                    <p class="text-muted xxsmall mb-0">Nature setting</p>
                                 </div>
                             </div>
                         </div>
@@ -676,6 +690,7 @@
                                 <div class="card-body p-2 text-center">
                                     <i class="bi bi-water text-secondary fs-4 mb-1"></i>
                                     <h6 class="card-title mb-0 xsmall">Mountain</h6>
+                                    <p class="text-muted xxsmall mb-0">Adventure</p>
                                 </div>
                             </div>
                         </div>
@@ -685,6 +700,7 @@
                                 <div class="card-body p-2 text-center">
                                     <i class="bi bi-laptop text-secondary fs-4 mb-1"></i>
                                     <h6 class="card-title mb-0 xsmall">Desk</h6>
+                                    <p class="text-muted xxsmall mb-0">Workspace</p>
                                 </div>
                             </div>
                         </div>
@@ -694,6 +710,7 @@
                                 <div class="card-body p-2 text-center">
                                     <i class="bi bi-sofa text-secondary fs-4 mb-1"></i>
                                     <h6 class="card-title mb-0 xsmall">Living</h6>
+                                    <p class="text-muted xxsmall mb-0">Home setting</p>
                                 </div>
                             </div>
                         </div>
@@ -703,6 +720,7 @@
                                 <div class="card-body p-2 text-center">
                                     <i class="bi bi-hand-index text-secondary fs-4 mb-1"></i>
                                     <h6 class="card-title mb-0 xsmall">Hands</h6>
+                                    <p class="text-muted xxsmall mb-0">In action</p>
                                 </div>
                             </div>
                         </div>
@@ -712,6 +730,7 @@
                                 <div class="card-body p-2 text-center">
                                     <i class="bi bi-camera text-secondary fs-4 mb-1"></i>
                                     <h6 class="card-title mb-0 xsmall">Studio</h6>
+                                    <p class="text-muted xxsmall mb-0">Clean look</p>
                                 </div>
                             </div>
                         </div>
@@ -1193,18 +1212,19 @@ async function addClipToLibrary(clipId) {
 }
 
 let generatedSceneUrl = null;
-let selectedSceneTemplate = 'ai-suggested'; // Default to AI suggested
+let selectedSceneTemplate = 'none'; // Default to no scene (focus on product)
 
 const sceneTemplateDescriptions = {
-    'ai-suggested': 'AI will analyze your product specs and suggest the perfect scene context',
-    'kitchen': 'Product on marble kitchen counter, morning sunlight streaming through window, coffee cup and fresh ingredients nearby',
-    'beauty': 'Product on elegant bathroom counter, soft diffused lighting, candles and plush towels, spa-like atmosphere',
-    'outdoor': 'Product in natural outdoor setting, golden hour lighting, trees and greenery in soft focus background',
-    'mountain': 'Product held by person near pristine mountain waterfall, adventure setting, crystal clear water, majestic peaks',
-    'desk': 'Product on modern minimalist desk, laptop and notebook nearby, clean lines, professional workspace',
-    'living': 'Product on coffee table in cozy living room, warm ambient lighting, comfortable sofa, inviting atmosphere',
-    'hands': 'Close-up of hands holding/using the product, lifestyle context, natural skin tones, shallow depth of field',
-    'studio': 'Product on clean gradient background, professional studio lighting, sharp focus, commercial photography style'
+    'none': 'Focus on the product itself - clean product showcase with smooth camera movement',
+    'ai-suggested': 'AI analyzes your product specs and suggests the perfect scene context',
+    'kitchen': 'Product on marble kitchen counter, morning sunlight, coffee cup nearby',
+    'beauty': 'Product on elegant bathroom counter, soft spa lighting, candles and towels',
+    'outdoor': 'Product in natural outdoor setting, golden hour lighting, trees in background',
+    'mountain': 'Product near pristine mountain waterfall, adventure setting, crystal clear water',
+    'desk': 'Product on modern minimalist desk, laptop nearby, professional workspace',
+    'living': 'Product on coffee table in cozy living room, warm ambient lighting',
+    'hands': 'Close-up of hands holding/using the product, lifestyle context, authentic moment',
+    'studio': 'Product on clean gradient background, professional studio lighting, commercial look'
 };
 
 function selectSceneTemplate(template, cardElement) {

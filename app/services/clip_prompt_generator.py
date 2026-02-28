@@ -49,7 +49,8 @@ class ClipPromptGenerator:
         use_case: Any,  # UseCase model
         script_content: str,
         product_images: List[str],
-        num_clips: Optional[int] = None
+        num_clips: Optional[int] = None,
+        scene_context: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Generate video prompts for each clip using GPT-4o Vision.
         
@@ -59,12 +60,16 @@ class ClipPromptGenerator:
             script_content: The full voiceover script
             product_images: List of image file paths for the product
             num_clips: Number of clips to generate (defaults to use_case.num_clips)
+            scene_context: Optional scene context to enhance prompts (e.g., 'on kitchen counter')
             
         Returns:
             List of clip configurations with AI-generated prompts
         """
         if num_clips is None:
             num_clips = use_case.num_clips or 4
+        
+        # Store scene context for use in prompt generation
+        self._scene_context = scene_context
         
         # Determine clip types based on narrative structure
         clip_types = self._determine_clip_types(num_clips)
@@ -340,6 +345,11 @@ RULES:
             '4:5': 'vertical format, Instagram-friendly'
         }
         
+        # Add scene context if provided
+        scene_context_text = ""
+        if hasattr(self, '_scene_context') and self._scene_context:
+            scene_context_text = f"\n=== SCENE CONTEXT ===\nThe product should appear {self._scene_context}\n"
+
         text_content = f"""=== CLIP INFORMATION ===
 Clip Position: {clip_index + 1} of {total_clips}
 Narrative Role: {clip_type.upper()}
@@ -351,7 +361,7 @@ Video Format: {format_descriptors.get(video_format, video_format)}
 Name: {product_name}
 Description: {product_desc[:200] if product_desc else 'N/A'}
 Key Specs: {', '.join([f"{k}: {v}" for k, v in list(product_specs.items())[:3]]) if product_specs else 'N/A'}
-
+{scene_context_text}
 === SCRIPT FOR THIS CLIP ===
 "{script_segment}"
 
@@ -374,7 +384,7 @@ Analyze the product image and create a prompt that:
 1. Uses the product's actual visual characteristics
 2. Matches the voiceover script's message
 3. Fits the {clip_type} role in the story arc
-4. Appeals to {target_audience}
+4. Appeals to {target_audience}{f"\n5. Incorporates the scene context provided above" if scene_context_text else ""}
 
 Return ONLY the JSON object with visual_prompt, motion_direction, and mood."""
 

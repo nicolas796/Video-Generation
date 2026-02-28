@@ -1655,6 +1655,50 @@ The image should be visually striking, professionally composed, and suitable as 
     return prompt
 
 
+def _get_scene_context(scene_template, product, script, custom_description):
+    """Get scene context description based on template selection.
+    
+    Args:
+        scene_template: Template key ('none', 'ai-suggested', 'kitchen', etc.)
+        product: Product model
+        script: Script model
+        custom_description: Additional user description
+        
+    Returns:
+        Scene context string for prompt enhancement, or None if 'none' selected
+    """
+    if scene_template == 'none':
+        # No scene context - just use custom description if provided
+        return custom_description if custom_description else None
+    
+    # Define scene templates
+    scene_templates = {
+        'ai-suggested': None,  # Will be generated dynamically
+        'kitchen': 'on elegant marble kitchen counter with warm morning sunlight streaming through window, fresh ingredients nearby',
+        'beauty': 'on pristine bathroom vanity counter with soft diffused spa lighting, candles and plush white towels',
+        'outdoor': 'in natural outdoor setting during golden hour, soft focus greenery and trees in background, warm sunlight',
+        'mountain': 'held naturally by person near majestic mountain waterfall, pristine nature setting, crystal clear water',
+        'desk': 'on modern minimalist desk setup with laptop and notebook nearby, clean professional workspace',
+        'living': 'on wooden coffee table in cozy living room with warm ambient lighting, comfortable sofa visible',
+        'hands': 'in close-up of hands naturally holding and using the product, shallow depth of field, authentic moment',
+        'studio': 'on clean gradient background with professional studio lighting and soft shadows, sharp focus'
+    }
+    
+    scene_context = scene_templates.get(scene_template)
+    
+    # If AI suggested, generate context based on product
+    if scene_template == 'ai-suggested':
+        scene_context = _generate_ai_scene_suggestion(product, script)
+    
+    # Add custom description if provided
+    if custom_description and scene_context:
+        scene_context += f". {custom_description}"
+    elif custom_description:
+        scene_context = custom_description
+    
+    return scene_context
+
+
 def _generate_scene_for_clip(use_case, product, script, scene_template, custom_description, upload_folder):
     """Generate a scene image combining product with scene template context.
     
@@ -1877,32 +1921,22 @@ def generate_video_clips(use_case_id):
         if remaining_clips <= 0:
             return jsonify({'error': f'All {target_clips} clips already generated. Delete one to regenerate.'}), 400
         
-        # Check if scene template is provided - generate scene image first
-        scene_template = data.get('scene_template')
+        # Get scene template and other parameters
+        scene_template = data.get('scene_template', 'none')
         custom_description = data.get('custom_description', '')
         selected_image_url = data.get('selected_image_url')
-        generated_scene_image_url = None
         
-        if scene_template and selected_image_url:
-            # Generate scene image combining product with scene context
-            scene_result = _generate_scene_for_clip(
-                use_case=use_case,
-                product=product,
-                script=script,
-                scene_template=scene_template,
-                custom_description=custom_description,
-                upload_folder=upload_folder
-            )
-            if scene_result and scene_result.get('success'):
-                generated_scene_image_url = scene_result.get('local_url')
-                current_app.logger.info(f'Generated scene image for clips: {generated_scene_image_url}')
+        # Get scene context for prompt enhancement
+        scene_context = _get_scene_context(scene_template, product, script, custom_description)
+        current_app.logger.info(f'Using scene template: {scene_template}', scene_context=scene_context[:100] if scene_context else 'none')
         
-        # Use GPT-4o Vision to generate context-aware prompts
+        # Use GPT-4o Vision to generate context-aware prompts with scene context
         clips_config = manager.generate_clip_prompts(
             use_case=use_case,
             script_content=script.content,
             product=product,
-            num_clips=target_clips
+            num_clips=target_clips,
+            scene_context=scene_context
         )
         
         generated_clips = []
@@ -1924,22 +1958,11 @@ def generate_video_clips(use_case_id):
             prompt = clip_config['prompt']
             clip_type = clip_config['clip_type']
             
-            # Get the image URL for this clip
-            # Priority: 1) Generated scene image (if template selected), 2) User-selected product image URL
+            # Get the image URL for this clip - use selected product image directly
             image_url = None
             
-            # Use generated scene image if available
-            if generated_scene_image_url:
-                # Convert local path to full URL for Pollo.ai
-                external_base = os.getenv('EXTERNAL_BASE_URL', '')
-                if external_base:
-                    image_url = external_base.rstrip('/') + generated_scene_image_url
-                else:
-                    image_url = generated_scene_image_url
-                current_app.logger.info(f'Using generated scene image for clip {clip_index}')
-            
-            # Fall back to selected product image URL
-            if not image_url and selected_image_url:
+            # Use selected product image URL
+            if selected_image_url:
                 if selected_image_url.startswith(('http://', 'https://')):
                     image_url = selected_image_url
                     current_app.logger.info(f'Using selected product image for clip {clip_index}')

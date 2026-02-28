@@ -141,7 +141,8 @@ class VideoClipManager:
         use_case: UseCase,
         script_content: str,
         product: Product,
-        num_clips: Optional[int] = None
+        num_clips: Optional[int] = None,
+        scene_context: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Generate video prompts for each clip using GPT-4o Vision.
         
@@ -153,6 +154,7 @@ class VideoClipManager:
             script_content: The voiceover script
             product: The product being featured
             num_clips: Number of clips to generate (defaults to use_case.num_clips)
+            scene_context: Optional scene context to enhance prompts (e.g., 'on kitchen counter')
             
         Returns:
             List of clip configurations with AI-generated prompts
@@ -173,7 +175,8 @@ class VideoClipManager:
                 use_case=use_case,
                 script_content=script_content,
                 product_images=product_images,
-                num_clips=num_clips
+                num_clips=num_clips,
+                scene_context=scene_context
             )
             
             self._log_info(f"Generated {len(clips_config)} AI-powered clip prompts", 
