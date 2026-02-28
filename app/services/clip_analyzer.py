@@ -78,7 +78,10 @@ class ClipAnalyzer:
             }
 
         # Try to infer from generation prompt first (fast, free, no API call)
-        if use_prompt_fallback and clip.prompt:
+        # BUT: Skip this for uploaded videos (model_used='uploaded') - they need AI vision
+        is_uploaded_video = clip.model_used == 'uploaded'
+        
+        if use_prompt_fallback and clip.prompt and not is_uploaded_video:
             prompt_analysis = self._analyze_from_prompt(clip)
             if prompt_analysis:
                 self._persist_analysis(clip, prompt_analysis, frames_used=0)
@@ -91,8 +94,9 @@ class ClipAnalyzer:
 
         frames = self._gather_visual_inputs(clip, upload_folder)
         if not frames:
-            # Even without frames, try prompt-based analysis as last resort
-            if use_prompt_fallback and clip.prompt:
+            # For AI-generated clips without frames, try prompt-based analysis as last resort
+            # For uploaded videos without frames, we can't analyze - need video file
+            if use_prompt_fallback and clip.prompt and not is_uploaded_video:
                 prompt_analysis = self._analyze_from_prompt(clip)
                 if prompt_analysis:
                     self._persist_analysis(clip, prompt_analysis, frames_used=0)
