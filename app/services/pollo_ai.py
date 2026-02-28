@@ -68,12 +68,15 @@ class PolloAIClient:
         
         # Hunyuan
         'hunyuan': {'provider': 'hunyuan', 'model': 'hunyuan', 'supports_text': True, 'supports_image': True},
+        
+        # Sora (OpenAI) - available on Pollo.ai
+        'sora-2': {'provider': 'sora', 'model': 'sora-2', 'supports_text': True, 'supports_image': True},
     }
     
     # Style to model recommendations - using less restrictive models
     STYLE_MODELS = {
-        'realistic': ['kling-1.6', 'luma-ray-2.0', 'pika-2.2'],
-        'cinematic': ['luma-ray-2.0', 'kling-1.6', 'pika-2.2'],
+        'realistic': ['sora-2', 'kling-1.6', 'luma-ray-2.0', 'pika-2.2'],
+        'cinematic': ['sora-2', 'luma-ray-2.0', 'kling-1.6', 'pika-2.2'],
         'animated': ['kling-1.6', 'pika-2.2', 'luma-ray-2.0'],
         'comic': ['pika-2.2', 'kling-1.6', 'luma-ray-2.0'],
     }
@@ -480,6 +483,17 @@ class PolloAIClient:
             }
             if image_url:
                 input_data['image'] = image_url
+                
+        elif provider == 'sora':
+            input_data = {
+                'prompt': prompt,
+                'aspectRatio': aspect_ratio,
+                'length': length
+            }
+            if image_url:
+                input_data['image'] = image_url
+            if negative_prompt:
+                input_data['negativePrompt'] = negative_prompt
                 
         elif provider == 'hunyuan':
             input_data = {
