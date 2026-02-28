@@ -473,8 +473,8 @@
                     <button class="btn btn-outline-success" onclick="openUploadModal()">
                         <i class="bi bi-upload me-1"></i>Upload Video
                     </button>
-                    <button id="refreshBtn" class="btn btn-outline-secondary" onclick="loadClips()">
-                        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                    <button class="btn btn-outline-info" onclick="openLibraryModal()">
+                        <i class="bi bi-collection-play me-1"></i>Browse Library
                     </button>
                 </div>
             </div>
@@ -772,6 +772,75 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Browse Library Modal -->
+<div class="modal fade" id="libraryModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-collection-play me-2"></i>Browse Clip Library</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Search and Filter -->
+                <div class="row g-3 mb-4">
+                    <div class="col-md-6">
+                        <div class="input-group">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="text" class="form-control" id="librarySearch" placeholder="Search clips..." oninput="filterLibraryClips()">
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <select class="form-select" id="libraryFilterType" onchange="filterLibraryClips()">
+                            <option value="">All Types</option>
+                            <option value="hook">Hook</option>
+                            <option value="product_showcase">Product Showcase</option>
+                            <option value="product_demo">Product Demo</option>
+                            <option value="benefits">Benefits</option>
+                            <option value="cta">Call to Action</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <select class="form-select" id="librarySort" onchange="loadLibraryClips()">
+                            <option value="added_to_library_at">Newest First</option>
+                            <option value="usage_count">Most Used</option>
+                            <option value="rating">Highest Rated</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <!-- Library Clips Grid -->
+                <div id="libraryClipsGrid" class="row g-3" style="max-height: 60vh; overflow-y: auto;">
+                    <!-- Clips will be loaded here -->
+                </div>
+                
+                <!-- Empty State -->
+                <div id="libraryEmptyState" class="text-center py-5 d-none">
+                    <i class="bi bi-collection text-muted fs-1"></i>
+                    <p class="text-muted mt-2">No clips found in the library.</p>
+                    <a href="/library" class="btn btn-outline-primary" target="_blank">
+                        <i class="bi bi-plus-circle me-1"></i>Add Clips to Library
+                    </a>
+                </div>
+                
+                <!-- Loading State -->
+                <div id="libraryLoading" class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted mt-2">Loading library clips...</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <a href="/library" class="btn btn-outline-primary" target="_blank">
+                    <i class="bi bi-box-arrow-up-right me-1"></i>Open Full Library
+                </a>
             </div>
         </div>
     </div>
@@ -1485,6 +1554,154 @@ async function confirmDelete() {
     } catch (error) {
         console.error('Error:', error);
         alert('Failed to delete clip. Please try again.');
+    }
+}
+
+// Library functions
+let libraryClips = [];
+
+function openLibraryModal() {
+    // Reset filters
+    document.getElementById('librarySearch').value = '';
+    document.getElementById('libraryFilterType').value = '';
+    document.getElementById('librarySort').value = 'added_to_library_at';
+    
+    // Show modal
+    const modal = new bootstrap.Modal(document.getElementById('libraryModal'));
+    modal.show();
+    
+    // Load clips
+    loadLibraryClips();
+}
+
+async function loadLibraryClips() {
+    const grid = document.getElementById('libraryClipsGrid');
+    const loading = document.getElementById('libraryLoading');
+    const emptyState = document.getElementById('libraryEmptyState');
+    
+    // Show loading
+    grid.innerHTML = '';
+    loading.classList.remove('d-none');
+    emptyState.classList.add('d-none');
+    
+    try {
+        const sortBy = document.getElementById('librarySort').value;
+        const response = await fetch(`/api/library/clips?sort=${sortBy}&limit=50`);
+        const data = await response.json();
+        
+        loading.classList.add('d-none');
+        
+        if (data.success && data.clips.length > 0) {
+            libraryClips = data.clips;
+            filterLibraryClips();
+        } else {
+            emptyState.classList.remove('d-none');
+        }
+    } catch (error) {
+        console.error('Error loading library clips:', error);
+        loading.classList.add('d-none');
+        emptyState.classList.remove('d-none');
+    }
+}
+
+function filterLibraryClips() {
+    const search = document.getElementById('librarySearch').value.toLowerCase();
+    const typeFilter = document.getElementById('libraryFilterType').value;
+    const grid = document.getElementById('libraryClipsGrid');
+    const emptyState = document.getElementById('libraryEmptyState');
+    
+    const filtered = libraryClips.filter(clip => {
+        const matchesSearch = !search || 
+            (clip.name && clip.name.toLowerCase().includes(search)) ||
+            (clip.description && clip.description.toLowerCase().includes(search)) ||
+            (clip.tags && clip.tags.some(tag => tag.toLowerCase().includes(search)));
+        
+        const matchesType = !typeFilter || clip.content_type === typeFilter;
+        
+        return matchesSearch && matchesType;
+    });
+    
+    if (filtered.length === 0) {
+        grid.innerHTML = '';
+        emptyState.classList.remove('d-none');
+        return;
+    }
+    
+    emptyState.classList.add('d-none');
+    grid.innerHTML = filtered.map(clip => renderLibraryClipCard(clip)).join('');
+}
+
+function renderLibraryClipCard(clip) {
+    const thumbnailUrl = clip.thumbnail_path ? `/uploads/${clip.thumbnail_path}` : null;
+    const contentType = clip.content_type || 'Scene';
+    const duration = clip.duration ? `${clip.duration}s` : '--';
+    const rating = clip.rating || 0;
+    const usageCount = clip.usage_count || 0;
+    
+    // Generate star rating HTML
+    const starsHtml = Array(5).fill(0).map((_, i) => 
+        `<i class="bi bi-star${i < rating ? '-fill' : ''} text-warning small"></i>`
+    ).join('');
+    
+    return `
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100 clip-card" style="cursor: pointer;" onclick="addLibraryClipToUseCase(${clip.id})">
+                <div class="clip-thumbnail" style="aspect-ratio: 9/16; background: #f8f9fa; position: relative; overflow: hidden;">
+                    ${thumbnailUrl 
+                        ? `<img src="${thumbnailUrl}" alt="${clip.name}" style="width: 100%; height: 100%; object-fit: cover;">`
+                        : `<div class="d-flex align-items-center justify-content-center h-100 text-muted"><i class="bi bi-film fs-1"></i></div>`
+                    }
+                    <div class="position-absolute bottom-0 end-0 m-2">
+                        <span class="badge bg-dark">${duration}</span>
+                    </div>
+                    <div class="position-absolute top-0 end-0 m-2">
+                        <span class="badge bg-info" title="Used ${usageCount} times"><i class="bi bi-check-circle me-1"></i>${usageCount}</span>
+                    </div>
+                </div>
+                <div class="card-body p-2">
+                    <h6 class="card-title small mb-1 text-truncate" title="${clip.name}">${clip.name}</h6>
+                    <p class="card-text text-muted xsmall mb-1 text-truncate" title="${clip.description || ''}">${clip.description || 'No description'}</p>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span class="badge bg-secondary xsmall">${contentType.replace('_', ' ')}</span>
+                        <span>${starsHtml}</span>
+                    </div>
+                </div>
+                <div class="card-footer p-2 bg-light">
+                    <button class="btn btn-primary btn-sm w-100" onclick="event.stopPropagation(); addLibraryClipToUseCase(${clip.id})">
+                        <i class="bi bi-plus-circle me-1"></i>Add to Project
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+async function addLibraryClipToUseCase(libraryClipId) {
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/library-clips`, {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({ library_clip_id: libraryClipId })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            showToast('Library clip added to project!');
+            // Close modal and refresh clips
+            bootstrap.Modal.getInstance(document.getElementById('libraryModal')).hide();
+            loadClips();
+        } else if (response.status === 409) {
+            showToast('This clip is already in your project', 'info');
+        } else {
+            showToast('Error: ' + (data.error || 'Failed to add clip'), 'error');
+        }
+    } catch (error) {
+        console.error('Error adding library clip:', error);
+        showToast('Failed to add library clip', 'error');
     }
 }
 
