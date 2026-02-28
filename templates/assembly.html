@@ -356,13 +356,154 @@ async function saveClipOrder(sequencePayload) {
 function toggleButtonLoading(buttonId, isLoading, loadingLabel) { const button = document.getElementById(buttonId); if (!button) return; if (isLoading) { button.dataset.originalText = button.innerHTML; if (loadingLabel) button.innerHTML = loadingLabel; button.disabled = true; } else { if (button.dataset.originalText) { button.innerHTML = button.dataset.originalText; delete button.dataset.originalText; } button.disabled = false; } }
 function escapeHtml(str) { if (str === undefined || str === null) return ''; return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 function renderFinalVideo() { new bootstrap.Modal(document.getElementById('renderModal')).show(); }
+let assemblyPollInterval = null;
+
 async function startRender() {
-    const modalBtn = document.querySelector('#renderModal .btn-success'); if (modalBtn) modalBtn.disabled = true; toggleButtonLoading('renderBtn', true, 'Rendering…');
+    const modalBtn = document.querySelector('#renderModal .btn-success');
+    if (modalBtn) modalBtn.disabled = true;
+    toggleButtonLoading('renderBtn', true, 'Starting...');
+    
     try {
-        const response = await fetch(`/api/use-cases/${useCaseId}/assemble`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' }, body: JSON.stringify({ quality: document.getElementById('renderQuality').value, transition: document.getElementById('renderTransitions').value, include_voiceover: document.getElementById('includeVoiceover').checked, transition_duration: document.getElementById('renderTransitions').value === 'cut' ? 0.1 : 0.5 }) });
-        const data = await response.json(); if (!response.ok || !data.success) throw new Error(data.error || 'Rendering failed');
-        bootstrap.Modal.getInstance(document.getElementById('renderModal')).hide(); alert('Final video ready! Redirecting to output page.'); window.location.href = `/output/${useCaseId}`;
-    } catch (error) { alert(error.message || 'Unable to complete render'); } finally { toggleButtonLoading('renderBtn', false); if (modalBtn) modalBtn.disabled = false; }
+        const response = await fetch(`/api/use-cases/${useCaseId}/assemble`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': '{{ csrf_token() }}'
+            },
+            body: JSON.stringify({
+                quality: document.getElementById('renderQuality').value,
+                transition: document.getElementById('renderTransitions').value,
+                include_voiceover: document.getElementById('includeVoiceover').checked,
+                transition_duration: document.getElementById('renderTransitions').value === 'cut' ? 0.1 : 0.5
+            })
+        });
+        
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.error || 'Rendering failed');
+        
+        // Check if async or sync
+        if (data.async && data.task_id) {
+            // Async processing - start polling
+            bootstrap.Modal.getInstance(document.getElementById('renderModal')).hide();
+            showAssemblyProgress(data.task_id, data.poll_url);
+        } else {
+            // Sync processing - immediate completion
+            bootstrap.Modal.getInstance(document.getElementById('renderModal')).hide();
+            alert('Final video ready! Redirecting to output page.');
+            window.location.href = `/output/${useCaseId}`;
+        }
+    } catch (error) {
+        alert(error.message || 'Unable to complete render');
+    } finally {
+        toggleButtonLoading('renderBtn', false);
+        if (modalBtn) modalBtn.disabled = false;
+    }
+}
+
+function showAssemblyProgress(taskId, pollUrl) {
+    // Show progress modal
+    const progressHtml = `
+        <div class="modal fade" id="assemblyProgressModal" tabindex="-1" data-bs-backdrop="static">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-film me-2"></i>Assembling Video</h5>
+                    </div>
+                    <div class="modal-body text-center p-4">
+                        <div class="mb-3">
+                            <div class="spinner-border text-primary mb-3" role="status" style="width: 3rem; height: 3rem;">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                        </div>
+                        <h6 id="assemblyStep">Initializing...</h6>
+                        <p class="text-muted small" id="assemblyMessage">Preparing video assembly...</p>
+                        <div class="progress mt-3" style="height: 8px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" id="assemblyProgressBar" role="progressbar" style="width: 0%"></div>
+                        </div>
+                        <p class="text-muted small mt-2" id="assemblyProgressText">0%</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Remove existing modal if present
+    const existingModal = document.getElementById('assemblyProgressModal');
+    if (existingModal) existingModal.remove();
+    
+    // Add modal to body
+    const div = document.createElement('div');
+    div.innerHTML = progressHtml;
+    document.body.appendChild(div.firstElementChild);
+    
+    // Show modal
+    const modal = new bootstrap.Modal(document.getElementById('assemblyProgressModal'));
+    modal.show();
+    
+    // Start polling
+    pollAssemblyStatus(taskId, pollUrl);
+}
+
+async function pollAssemblyStatus(taskId, pollUrl) {
+    const stepEl = document.getElementById('assemblyStep');
+    const messageEl = document.getElementById('assemblyMessage');
+    const progressBar = document.getElementById('assemblyProgressBar');
+    const progressText = document.getElementById('assemblyProgressText');
+    
+    const checkStatus = async () => {
+        try {
+            const response = await fetch(pollUrl);
+            const data = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to check status');
+            }
+            
+            // Update UI
+            const progress = data.progress || 0;
+            progressBar.style.width = `${progress}%`;
+            progressText.textContent = `${Math.round(progress)}%`;
+            
+            if (data.step) {
+                stepEl.textContent = data.step.charAt(0).toUpperCase() + data.step.slice(1);
+            }
+            if (data.message) {
+                messageEl.textContent = data.message;
+            }
+            
+            // Check if complete
+            if (data.status === 'SUCCESS' || data.status === 'COMPLETED') {
+                // Success!
+                clearInterval(assemblyPollInterval);
+                bootstrap.Modal.getInstance(document.getElementById('assemblyProgressModal')).hide();
+                alert('Final video ready! Redirecting to output page.');
+                window.location.href = `/output/${useCaseId}`;
+                return;
+            }
+            
+            if (data.status === 'FAILURE' || data.status === 'FAILED') {
+                // Failed
+                clearInterval(assemblyPollInterval);
+                bootstrap.Modal.getInstance(document.getElementById('assemblyProgressModal')).hide();
+                alert(`Assembly failed: ${data.error || 'Unknown error'}`);
+                return;
+            }
+            
+            // Still processing - continue polling
+            // Status is PENDING, STARTED, or PROGRESS
+            
+        } catch (error) {
+            console.error('Polling error:', error);
+            // Continue polling on error, but show warning
+            messageEl.textContent = 'Connection issue, retrying...';
+        }
+    };
+    
+    // Check immediately
+    await checkStatus();
+    
+    // Then poll every 3 seconds
+    assemblyPollInterval = setInterval(checkStatus, 3000);
 }
 </script>
 {% endblock %}
