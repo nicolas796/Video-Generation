@@ -48,6 +48,27 @@ def get_database_url():
     
     return database_url
 
+def get_upload_folder():
+    """Get upload folder path.
+    
+    In production on Render, use the persistent disk if available.
+    Falls back to local uploads folder.
+    """
+    # Check for Render Disk (persistent storage)
+    render_disk = os.getenv('RENDER_DISK_MOUNT_PATH')
+    if render_disk and os.path.exists(render_disk):
+        return os.path.join(render_disk, 'uploads')
+    
+    # Check for explicit UPLOAD_FOLDER env var
+    upload_folder = os.getenv('UPLOAD_FOLDER')
+    if upload_folder:
+        return upload_folder
+    
+    # Default to local uploads folder
+    base_dir = os.path.abspath(os.path.dirname(__file__))
+    return os.path.join(base_dir, 'uploads')
+
+
 class Config:
     """Base configuration class."""
     
@@ -66,7 +87,7 @@ class Config:
     
     # Upload paths
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-    UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', os.path.join(BASE_DIR, 'uploads'))
+    UPLOAD_FOLDER = get_upload_folder()
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
     
     # Product uploads

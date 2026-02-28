@@ -33,6 +33,10 @@ services:
       - key: APP_BASE_URL
         value: https://product-video-generator.onrender.com  # Will be updated with actual URL
       
+      # Render Disk configuration (persistent storage)
+      - key: RENDER_DISK_MOUNT_PATH
+        value: /var/data
+      
       # Secrets (set these in Render Dashboard after first deploy)
       - key: SECRET_KEY
         generateValue: true
@@ -58,12 +62,12 @@ services:
     # Auto-deploy on git push
     autoDeploy: true
     
-    # Disk for file uploads (ephemeral - files lost on restart)
-    # For persistent storage, consider AWS S3 or similar
+    # Persistent disk for video uploads
+    # Files survive deploys and restarts
     disk:
-      name: uploads
-      mountPath: /opt/render/project/src/uploads
-      sizeGB: 5
+      name: video-uploads
+      mountPath: /var/data
+      sizeGB: 10
 
 # PostgreSQL Database
 databases:

@@ -45,10 +45,18 @@ def create_app(config_name='default'):
     # Ensure upload directories exist and create default admin
     with app.app_context():
         import os
+        
+        # Log upload folder location for debugging
+        upload_folder = app.config['UPLOAD_FOLDER']
+        app.logger.info(f"Upload folder: {upload_folder}")
+        if os.path.exists('/var/data'):
+            app.logger.info("Render Disk detected at /var/data")
+        
         for folder in [app.config['PRODUCT_UPLOAD_FOLDER'], 
                        app.config['CLIP_UPLOAD_FOLDER'],
                        app.config['FINAL_UPLOAD_FOLDER']]:
             os.makedirs(folder, exist_ok=True)
+            app.logger.info(f"Ensured directory exists: {folder}")
         
         # Create default admin user if configured (skip during build phase)
         # Skip if RENDER environment variable is set but database is not ready
