@@ -1,9 +1,11 @@
 """CLI commands for the Product Video Generator."""
+import os
+import re
 import click
 from flask.cli import with_appcontext
 
 from app import db
-from app.models import User
+from app.models import User, VideoClip
 from app.auth import create_admin_user
 
 
@@ -66,8 +68,117 @@ def reset_password_command(username, password):
     click.echo(click.style(f'✓ Password reset for user "{username}"', fg='green'))
 
 
+@click.command('migrate-clip-filenames')
+@with_appcontext
+def migrate_clip_filenames_command():
+    """Migrate clip filenames from old format to new format.
+    
+    Old format: clip_{id}.mp4 (e.g., clip_13.mp4)
+    New format: clip_{id:03d}_{sequence_order:02d}.mp4 (e.g., clip_013_01.mp4)
+    """
+    from flask import current_app
+    
+    upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
+    clips_folder = os.path.join(upload_folder, 'clips')
+    
+    if not os.path.exists(clips_folder):
+        click.echo(click.style(f'✗ Clips folder not found: {clips_folder}', fg='red'))
+        raise click.Abort()
+    
+    click.echo(click.style('Starting clip filename migration...', fg='blue'))
+    click.echo(f'Upload folder: {upload_folder}')
+    click.echo('')
+    
+    clips = VideoClip.query.all()
+    click.echo(f'Found {len(clips)} clips in database')
+    click.echo('')
+    
+    migrated = 0
+    skipped = 0
+    errors = 0
+    
+    for clip in clips:
+        if not clip.file_path:
+            click.echo(f'  [SKIP] Clip {clip.id}: No file_path')
+            skipped += 1
+            continue
+        
+        # Check if already in new format
+        if re.match(r'clip_\d{3}_\d{2}\.mp4$', os.path.basename(clip.file_path)):
+            click.echo(f'  [SKIP] Clip {clip.id}: Already in new format')
+            skipped += 1
+            continue
+        
+        # Old format: clip_{id}.mp4
+        old_filename = f"clip_{clip.id}.mp4"
+        old_path = os.path.join(clips_folder, str(clip.use_case_id), old_filename)
+        
+        # New format: clip_{id:03d}_{sequence_order:02d}.mp4
+        new_filename = f"clip_{clip.id:03d}_{clip.sequence_order:02d}.mp4"
+        new_path = os.path.join(clips_folder, str(clip.use_case_id), new_filename)
+        new_db_path = f"clips/{clip.use_case_id}/{new_filename}"
+        
+        # Check if old file exists
+        if not os.path.exists(old_path):
+            current_full_path = os.path.join(upload_folder, clip.file_path)
+            if os.path.exists(current_full_path):
+                old_path = current_full_path
+            else:
+                click.echo(click.style(f'  [ERROR] Clip {clip.id}: File not found', fg='red'))
+                errors += 1
+                continue
+        
+        try:
+            os.rename(old_path, new_path)
+            clip.file_path = new_db_path
+            click.echo(click.style(f'  [OK] Clip {clip.id}: {old_filename} -> {new_filename}', fg='green'))
+            migrated += 1
+        except Exception as e:
+            click.echo(click.style(f'  [ERROR] Clip {clip.id}: {e}', fg='red'))
+            errors += 1
+    
+    # Migrate thumbnails
+    click.echo('')
+    click.echo('Migrating thumbnails...')
+    click.echo('')
+    
+    for clip in clips:
+        if not clip.thumbnail_path:
+            continue
+        
+        if re.match(r'clip_\d{3}_thumb\.jpg$', os.path.basename(clip.thumbnail_path)):
+            continue
+        
+        old_thumb_path = os.path.join(upload_folder, clip.thumbnail_path)
+        new_thumb_filename = f"clip_{clip.id:03d}_thumb.jpg"
+        new_thumb_path = os.path.join(clips_folder, str(clip.use_case_id), 'thumbnails', new_thumb_filename)
+        new_thumb_db_path = f"clips/{clip.use_case_id}/thumbnails/{new_thumb_filename}"
+        
+        if os.path.exists(old_thumb_path):
+            try:
+                os.makedirs(os.path.dirname(new_thumb_path), exist_ok=True)
+                os.rename(old_thumb_path, new_thumb_path)
+                clip.thumbnail_path = new_thumb_db_path
+                click.echo(click.style(f'  [OK] Clip {clip.id} thumbnail migrated', fg='green'))
+            except Exception as e:
+                click.echo(click.style(f'  [ERROR] Clip {clip.id} thumbnail: {e}', fg='red'))
+    
+    try:
+        db.session.commit()
+        click.echo('')
+        click.echo(click.style('Migration complete!', fg='green'))
+        click.echo(f'  Migrated: {migrated}')
+        click.echo(f'  Skipped: {skipped}')
+        click.echo(f'  Errors: {errors}')
+    except Exception as e:
+        db.session.rollback()
+        click.echo(click.style(f'ERROR: Failed to commit changes: {e}', fg='red'))
+        raise click.Abort()
+
+
 def init_cli(app):
     """Register CLI commands with the Flask app."""
     app.cli.add_command(create_admin_command)
     app.cli.add_command(list_users_command)
     app.cli.add_command(reset_password_command)
+    app.cli.add_command(migrate_clip_filenames_command)
