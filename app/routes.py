@@ -3,6 +3,7 @@ import os
 import uuid
 import hmac
 import hashlib
+import json
 from datetime import datetime
 from typing import Any, Optional, Dict
 
@@ -1380,52 +1381,77 @@ def get_product_images(product_id):
 @main_bp.route('/api/use-cases/<int:use_case_id>/generate-scene', methods=['POST'])
 @login_required
 def generate_scene_image(use_case_id):
-    """Generate a scene image using AI based on the video script and use case."""
+    """Generate a scene image using AI based on scene templates or AI-suggested context."""
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     try:
         data = request.get_json() or {}
         custom_description = data.get('description', '')
-        style = data.get('style', 'realistic')
+        scene_template = data.get('scene_template', 'ai-suggested')
         clip_count = data.get('clip_count', 1)
-        
+
+        # Define scene templates
+        scene_templates = {
+            'kitchen': 'Product on elegant marble kitchen counter, warm morning sunlight streaming through window, fresh ingredients and coffee cup nearby, inviting domestic atmosphere',
+            'beauty': 'Product on pristine bathroom vanity counter, soft diffused spa lighting, candles and plush white towels, elegant self-care setting',
+            'outdoor': 'Product in natural outdoor setting during golden hour, soft focus greenery and trees in background, warm sunlight, lifestyle photography',
+            'mountain': 'Product held naturally by person near majestic mountain waterfall, pristine nature setting, crystal clear water, adventure and purity atmosphere',
+            'desk': 'Product on modern minimalist desk setup, laptop and notebook nearby, clean professional workspace, natural window light',
+            'living': 'Product on wooden coffee table in cozy living room, warm ambient lighting, comfortable sofa visible, inviting home atmosphere',
+            'hands': 'Close-up of hands naturally holding and using the product, shallow depth of field, lifestyle context, authentic moment',
+            'studio': 'Product on clean gradient background, professional studio lighting with soft shadows, sharp focus, commercial product photography'
+        }
+
+        # Get scene context based on template or AI suggestion
+        scene_context = None
+        ai_suggested_description = None
+
+        if scene_template == 'ai-suggested':
+            # Use GPT-4 to analyze product and suggest scene
+            ai_suggested_description = _generate_ai_scene_suggestion(product, script)
+            scene_context = ai_suggested_description
+            current_app.logger.info(f'AI suggested scene for {product.name}: {scene_context[:100]}...')
+        else:
+            scene_context = scene_templates.get(scene_template)
+            current_app.logger.info(f'Using template scene: {scene_template}')
+
         # Build the prompt for image generation
-        scene_prompt = build_scene_prompt(
+        scene_prompt = build_scene_prompt_with_context(
             product=product,
             use_case=use_case,
             script=script,
             custom_description=custom_description,
-            style=style,
+            scene_context=scene_context,
             clip_count=clip_count
         )
-        
+
         # Generate image using OpenAI DALL-E
         import openai
         import time
-        
+
         api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return jsonify({'success': False, 'error': 'OpenAI API key not configured'}), 500
-        
+
         # Create client without any proxy settings to avoid httpx compatibility issues
-        # httpx 0.28+ changed 'proxies' to 'proxy' which breaks some openai client versions
         http_client = None
         try:
             import httpx
             http_client = httpx.Client(timeout=60.0, follow_redirects=True)
         except Exception:
             pass  # Fallback to default client if httpx import fails
-        
+
         if http_client:
             client = openai.OpenAI(api_key=api_key, http_client=http_client)
         else:
             client = openai.OpenAI(api_key=api_key)
-        
-        current_app.logger.info(f'Generating scene image for use case {use_case_id}', 
-                               prompt_preview=scene_prompt[:100])
-        
+
+        current_app.logger.info(f'Generating scene image for use case {use_case_id}',
+                               prompt_preview=scene_prompt[:100],
+                               template=scene_template)
+
         # Generate image with DALL-E 3
         response = client.images.generate(
             model="dall-e-3",
@@ -1434,42 +1460,125 @@ def generate_scene_image(use_case_id):
             quality="standard",
             n=1
         )
-        
+
         image_url = response.data[0].url
-        
+
         # Download and save the image locally
         import requests
         from werkzeug.utils import secure_filename
-        
+
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         scene_folder = os.path.join(upload_folder, 'scenes', str(use_case_id))
         os.makedirs(scene_folder, exist_ok=True)
-        
+
         timestamp = int(time.time())
         filename = f"scene_{timestamp}.png"
         filepath = os.path.join(scene_folder, filename)
-        
+
         # Download the image
         img_response = requests.get(image_url, timeout=30)
         img_response.raise_for_status()
-        
+
         with open(filepath, 'wb') as f:
             f.write(img_response.content)
-        
+
         # Store relative path
         relative_path = f"scenes/{use_case_id}/{filename}"
-        
+
         return jsonify({
             'success': True,
             'image_url': f'/uploads/{relative_path}',
             'prompt': scene_prompt,
-            'message': 'Scene generated successfully'
+            'scene_template': scene_template,
+            'ai_suggestion': ai_suggested_description if scene_template == 'ai-suggested' else None,
+            'message': f'Scene generated successfully using {"AI suggestion" if scene_template == "ai-suggested" else scene_template + " template"}'
         })
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Scene generation error: {e}\n{traceback.format_exc()}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _generate_ai_scene_suggestion(product: Product, script: Optional[Any]) -> str:
+    """Use GPT-4 to analyze product and suggest a contextual scene.
+
+    Analyzes product name, description, specs, and script to create
+    a scene that matches the product's story and ingredients.
+
+    Examples:
+    - Vitamin C product -> citrus grove, sunny orchard
+    - Sleep aid -> cozy bedroom, moonlit night
+    - Outdoor gear -> mountain trail, adventure setting
+    """
+    try:
+        import openai
+
+        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            return "Product in lifestyle setting with professional lighting"
+
+        # Create client
+        http_client = None
+        try:
+            import httpx
+            http_client = httpx.Client(timeout=60.0, follow_redirects=True)
+        except Exception:
+            pass
+
+        if http_client:
+            client = openai.OpenAI(api_key=api_key, http_client=http_client)
+        else:
+            client = openai.OpenAI(api_key=api_key)
+
+        # Build product context
+        product_context = f"""
+Product Name: {product.name or 'Unknown'}
+Description: {product.description or 'No description'}
+Specifications: {json.dumps(product.specifications) if product.specifications else 'None'}
+Brand: {product.brand or 'Unknown'}
+"""
+
+        script_context = f"Script: {script.content[:500]}" if script and script.content else "No script available"
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a creative director for product marketing videos. Based on product details, suggest a perfect scene context that tells the product's story. Consider ingredients, benefits, target audience, and emotional appeal. Be specific about setting, lighting, and atmosphere. Return ONLY the scene description, no explanation."
+                },
+                {
+                    "role": "user",
+                    "content": f"""Analyze this product and suggest the perfect scene context for a marketing video:
+
+{product_context}
+
+{script_context}
+
+Suggest a scene that:
+1. Matches the product's key ingredients or benefits visually
+2. Appeals to the target audience emotionally
+3. Has clear, vivid imagery suitable for video
+4. Includes specific details about setting, lighting, and atmosphere
+
+Example good suggestions:
+- "Fresh orange grove at sunrise, morning dew on citrus trees, warm golden light filtering through leaves, product held by person in natural setting"
+- "Cozy bedroom at twilight, soft moonlight through sheer curtains, calming blue tones, product on nightstand with lavender sprigs"
+- "Mountain summit at golden hour, panoramic vista view, feeling of achievement and adventure, product in hiker's hand"
+
+Return ONLY the scene description (2-3 sentences), no other commentary."""
+                }
+            ],
+            max_tokens=200
+        )
+
+        suggestion = response.choices[0].message.content.strip()
+        return suggestion if suggestion else "Product in lifestyle setting with professional lighting"
+
+    except Exception as e:
+        current_app.logger.warning(f'Failed to generate AI scene suggestion: {e}')
+        return "Product in lifestyle setting with professional lighting"
 
 
 def build_scene_prompt(product, use_case, script, custom_description, style, clip_count):
@@ -1542,6 +1651,78 @@ Product context: {product_name} - {product_desc[:100]}
 Style: {style_desc}. {format_desc}. 
 
 The image should be visually striking, professionally composed, and suitable as a starting frame for a video advertisement. No text, no watermarks, no logos."""
+    
+    return prompt
+
+
+def build_scene_prompt_with_context(product, use_case, script, custom_description, scene_context, clip_count):
+    """Build a scene prompt using pre-defined or AI-suggested scene context.
+    
+    Args:
+        product: Product model
+        use_case: UseCase model
+        script: Script model (optional)
+        custom_description: User-provided additional description
+        scene_context: The scene template description or AI suggestion
+        clip_count: Number of clips being generated
+    """
+    
+    product_name = product.name or 'product'
+    product_desc = product.description or ''
+    video_format = use_case.format or '9:16'
+    
+    # Get script content for additional context
+    script_content = script.content if script else ''
+    
+    # Start with scene context as the foundation
+    base_scene = scene_context or f"Professional product showcase of {product_name}"
+    
+    # Add custom description if provided
+    if custom_description:
+        base_scene += f". {custom_description}"
+    
+    # Determine clip type for additional context
+    clip_types = []
+    if clip_count == 1:
+        clip_types = ['product_showcase']
+    elif clip_count == 2:
+        clip_types = ['hook', 'cta']
+    elif clip_count == 3:
+        clip_types = ['hook', 'solution', 'cta']
+    elif clip_count == 4:
+        clip_types = ['hook', 'problem', 'solution', 'cta']
+    else:
+        clip_types = ['hook', 'problem', 'solution', 'benefits', 'cta'][:clip_count]
+    
+    # For single clip, focus on the scene context entirely
+    # For multiple clips, add narrative context
+    narrative_context = ""
+    if clip_count > 1 and script_content:
+        # Extract a key phrase from the script for context
+        sentences = [s.strip() for s in script_content.replace('!', '.').replace('?', '.').split('.') if s.strip()]
+        if sentences:
+            narrative_context = f" Scene narrative: {sentences[0][:100]}"
+    
+    # Format guidance based on use case
+    format_guidance = {
+        '9:16': 'vertical composition, mobile-friendly portrait format, subject centered',
+        '16:9': 'horizontal composition, widescreen cinematic format',
+        '1:1': 'square composition, balanced framing, social media optimized',
+        '4:5': 'portrait composition, Instagram-friendly format'
+    }
+    format_desc = format_guidance.get(video_format, 'professional composition')
+    
+    # Lighting and quality descriptors
+    lighting_desc = "professional studio lighting with soft shadows, high resolution, sharp focus"
+    
+    # Build final prompt
+    prompt = f"""{base_scene}.{narrative_context}
+
+The product "{product_name}" is featured prominently in this {clip_types[0].replace('_', ' ')} scene. {product_desc[:80] if product_desc else ''}
+
+Technical specifications: {format_desc}, {lighting_desc}, photorealistic quality, suitable as starting frame for video advertisement.
+
+Important: No text overlays, no watermarks, no logos visible. Clean professional composition."""
     
     return prompt
 

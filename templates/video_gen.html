@@ -642,23 +642,113 @@
                     
                     <!-- Generate Scene Tab -->
                     <div class="tab-pane fade" id="scene-generator" role="tabpanel">
-                        <p class="text-muted small mb-3">Generate a custom scene image based on your video script. This creates more engaging, narrative-driven visuals.</p>
+                        <p class="text-muted small mb-3">Choose a scene context for your product. The AI will place your product in an environment that matches your brand story.</p>
                         
+                        <!-- Scene Template Selection -->
                         <div class="mb-3">
-                            <label class="form-label">Scene Description (optional)</label>
-                            <textarea class="form-control" id="sceneDescription" rows="3" placeholder="Describe the scene you want to generate. Leave empty to auto-generate based on script."></textarea>
-                            <div class="form-text">We'll use your video script to generate a relevant scene if left empty.</div>
+                            <label class="form-label">Select Scene Context</label>
+                            <div id="sceneTemplatesGrid" class="row g-2">
+                                <!-- AI Suggested Scene -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100 border-primary" onclick="selectSceneTemplate('ai-suggested', this)" data-template="ai-suggested">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-stars text-primary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small fw-bold">AI Suggested</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Based on your product specs</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Kitchen Counter -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100" onclick="selectSceneTemplate('kitchen', this)" data-template="kitchen">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-cup-hot text-secondary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small">Kitchen Counter</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Morning light, marble surface</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Beauty Counter -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100" onclick="selectSceneTemplate('beauty', this)" data-template="beauty">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-droplet text-secondary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small">Beauty Counter</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Bathroom, soft lighting</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Outdoor Lifestyle -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100" onclick="selectSceneTemplate('outdoor', this)" data-template="outdoor">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-sun text-secondary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small">Outdoor Lifestyle</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Natural setting, golden hour</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Mountain Waterfall -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100" onclick="selectSceneTemplate('mountain', this)" data-template="mountain">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-water text-secondary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small">Mountain Waterfall</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Adventure, pristine nature</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Modern Desk -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100" onclick="selectSceneTemplate('desk', this)" data-template="desk">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-laptop text-secondary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small">Modern Desk</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Workspace, minimalist</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Cozy Living Room -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100" onclick="selectSceneTemplate('living', this)" data-template="living">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-sofa text-secondary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small">Cozy Living Room</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Warm, inviting atmosphere</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Hands Using -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100" onclick="selectSceneTemplate('hands', this)" data-template="hands">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-hand-index text-secondary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small">Hands Using</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Product in action</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- Studio Product -->
+                                <div class="col-6">
+                                    <div class="card scene-template-card h-100" onclick="selectSceneTemplate('studio', this)" data-template="studio">
+                                        <div class="card-body p-2 text-center">
+                                            <i class="bi bi-camera text-secondary fs-3 mb-1"></i>
+                                            <h6 class="card-title mb-1 small">Studio Product</h6>
+                                            <p class="card-text text-muted xsmall mb-0">Clean, professional</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="selectedSceneInfo" class="mt-2 d-none">
+                                <div class="alert alert-info py-2 mb-0">
+                                    <small><i class="bi bi-info-circle me-1"></i><span id="selectedSceneDescription"></span></small>
+                                </div>
+                            </div>
                         </div>
                         
                         <div class="mb-3">
-                            <label class="form-label">Scene Style</label>
-                            <select class="form-select" id="sceneStyle">
-                                <option value="realistic">Realistic / Photographic</option>
-                                <option value="cinematic">Cinematic / Movie-style</option>
-                                <option value="lifestyle">Lifestyle / Natural</option>
-                                <option value="studio">Studio / Product-focused</option>
-                                <option value="animated">3D Animation style</option>
-                            </select>
+                            <label class="form-label">Custom Description (optional)</label>
+                            <textarea class="form-control" id="sceneDescription" rows="2" placeholder="Add specific details to the scene..."></textarea>
                         </div>
                         
                         <div id="generatedScenePreview" class="d-none">
@@ -1152,10 +1242,39 @@ async function addClipToLibrary(clipId) {
 }
 
 let generatedSceneUrl = null;
+let selectedSceneTemplate = 'ai-suggested'; // Default to AI suggested
+
+const sceneTemplateDescriptions = {
+    'ai-suggested': 'AI will analyze your product specs and suggest the perfect scene context',
+    'kitchen': 'Product on marble kitchen counter, morning sunlight streaming through window, coffee cup and fresh ingredients nearby',
+    'beauty': 'Product on elegant bathroom counter, soft diffused lighting, candles and plush towels, spa-like atmosphere',
+    'outdoor': 'Product in natural outdoor setting, golden hour lighting, trees and greenery in soft focus background',
+    'mountain': 'Product held by person near pristine mountain waterfall, adventure setting, crystal clear water, majestic peaks',
+    'desk': 'Product on modern minimalist desk, laptop and notebook nearby, clean lines, professional workspace',
+    'living': 'Product on coffee table in cozy living room, warm ambient lighting, comfortable sofa, inviting atmosphere',
+    'hands': 'Close-up of hands holding/using the product, lifestyle context, natural skin tones, shallow depth of field',
+    'studio': 'Product on clean gradient background, professional studio lighting, sharp focus, commercial photography style'
+};
+
+function selectSceneTemplate(template, cardElement) {
+    selectedSceneTemplate = template;
+    
+    // Remove selection from all cards
+    document.querySelectorAll('.scene-template-card').forEach(card => {
+        card.classList.remove('border-primary', 'border-3');
+    });
+    
+    // Add selection to clicked card
+    cardElement.classList.add('border-primary', 'border-3');
+    
+    // Show description
+    const description = sceneTemplateDescriptions[template];
+    document.getElementById('selectedSceneDescription').textContent = description;
+    document.getElementById('selectedSceneInfo').classList.remove('d-none');
+}
 
 async function generateSceneImage() {
     const description = document.getElementById('sceneDescription').value.trim();
-    const style = document.getElementById('sceneStyle').value;
     const clipCount = getClipCountToGenerate();
     
     // Show generating indicator
@@ -1169,7 +1288,7 @@ async function generateSceneImage() {
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
             body: JSON.stringify({
                 description: description,
-                style: style,
+                scene_template: selectedSceneTemplate,
                 clip_count: clipCount
             })
         });
