@@ -285,6 +285,9 @@ class ClipPromptGenerator:
 
 Your task: Create a detailed video generation prompt for a single clip in a multi-clip product video.
 
+CRITICAL - PRODUCT INTEGRATION:
+The product image provided is the STARTING FRAME for image-to-video generation. Your prompt MUST explicitly describe the product FROM THE IMAGE being integrated INTO the scene, not as a separate element.
+
 ROLE IN STORYTELLING:
 - HOOK: First 3 seconds. Must stop the scroll. High energy, pattern interrupt, visual curiosity.
 - PROBLEM: Show the pain point or "before" state. Relatable struggle, emotional connection.
@@ -295,18 +298,20 @@ ROLE IN STORYTELLING:
 
 OUTPUT FORMAT (JSON):
 {
-    "visual_prompt": "Detailed description of what to generate (15-30 words). Include: subject, action, setting, lighting, camera movement, style.",
+    "visual_prompt": "Detailed description of what to generate (15-30 words). MUST start with 'The product from the first frame shown...' or similar integration phrase. Include: subject, action, setting, lighting, camera movement, style.",
     "motion_direction": "Specific camera and subject motion (e.g., 'slow push-in on product', 'hand enters frame from right', 'smooth orbit around subject')",
     "mood": "Emotional tone and visual atmosphere (e.g., 'energetic and aspirational', 'calm and luxurious', 'playful and vibrant')"
 }
 
 RULES:
+- CRITICAL: The visual_prompt MUST explicitly reference the product from the image (e.g., "The product shown in the first frame is displayed...", "Featuring the product from the opening image...")
+- The product should feel naturally INTEGRATED into the scene, not pasted on top
 - Match the visual style to the product image provided
 - Align with the voiceover script segment - visuals and words should tell the same story
 - Consider the target audience - what visuals will resonate with them?
 - Keep prompts concise but vivid - avoid generic phrases like "high quality" or "professional"
 - Focus on SPECIFIC visual actions and compositions
-- The prompt will be used with image-to-video AI (the product image is the starting frame)"""
+- The product image is the starting frame - the video should animate FROM this image naturally"""
 
     def _build_user_content(
         self,
@@ -387,11 +392,19 @@ The clip's narrative role is: {clip_type}
 - CTA = clear product focus, urgency
 
 Analyze the product image and create a prompt that:
-1. Uses the product's actual visual characteristics
-2. Matches the voiceover script's message
-3. Fits the {clip_type} role in the story arc
-4. Appeals to {target_audience}
+1. **CRITICAL**: The visual_prompt MUST explicitly integrate the product FROM THE IMAGE into the scene (e.g., "The product shown in the first frame is beautifully displayed on a kitchen counter...")
+2. Uses the product's actual visual characteristics
+3. Matches the voiceover script's message
+4. Fits the {clip_type} role in the story arc
+5. Appeals to {target_audience}
 {scene_instruction}
+
+**PRODUCT INTEGRATION EXAMPLES:**
+- Good: "The product from the first frame sits elegantly on a marble countertop, soft morning light highlighting its sleek design..."
+- Good: "Featuring the product shown in the opening image, now in use within a modern kitchen setting..."
+- Bad: "A kitchen scene with modern appliances..." (doesn't mention the product from the image)
+
+The product should feel NATURALLY PART OF the scene, not like an overlay. The video animates FROM the provided image.
 
 Return ONLY the JSON object with visual_prompt, motion_direction, and mood."""
 
@@ -439,14 +452,14 @@ Return ONLY the JSON object with visual_prompt, motion_direction, and mood."""
         }.get(video_format, 'vertical format')
         
         clip_prompts = {
-            'hook': f"Eye-catching opening shot of {product_name}. Dynamic camera movement, engaging visual. {style_desc}, {format_desc}",
-            'problem': f"Scene showing the problem that {product_name} solves. Relatable situation, emotional connection. {style_desc}",
-            'solution': f"Beautiful demonstration of {product_name} solving the problem. Transformation moment. {style_desc}",
-            'benefits': f"Lifestyle scene showing satisfaction from using {product_name}. Happy person, aspirational setting. {style_desc}",
-            'social_proof': f"Scene suggesting people enjoying {product_name}. Positive atmosphere, community feeling. {style_desc}",
-            'cta': f"Strong closing scene with {product_name} front and center. Clear view, memorable final image. {style_desc}",
-            'product_showcase': f"Stunning highlight of {product_name}. Multiple angles, premium quality. {style_desc}",
-            'product_demo': f"Step by step demonstration of {product_name} in action. Clear visibility. {style_desc}"
+            'hook': f"The product from the first frame, {product_name}, appears in an eye-catching opening shot. Dynamic camera movement, engaging visual. {style_desc}, {format_desc}",
+            'problem': f"The product from the first frame shown in a scene illustrating the problem that {product_name} solves. Relatable situation, emotional connection. {style_desc}",
+            'solution': f"The product from the first frame beautifully demonstrating how {product_name} solves the problem. Transformation moment. {style_desc}",
+            'benefits': f"The product from the first frame in a lifestyle scene showing satisfaction from using {product_name}. Happy person, aspirational setting. {style_desc}",
+            'social_proof': f"The product from the first frame in a scene with people enjoying {product_name}. Positive atmosphere, community feeling. {style_desc}",
+            'cta': f"The product from the first frame in a strong closing scene, {product_name} front and center. Clear view, memorable final image. {style_desc}",
+            'product_showcase': f"The product from the first frame, {product_name}, in a stunning highlight. Multiple angles, premium quality. {style_desc}",
+            'product_demo': f"The product from the first frame in a step by step demonstration of {product_name} in action. Clear visibility. {style_desc}"
         }
         
         return {
