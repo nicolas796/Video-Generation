@@ -50,9 +50,17 @@ class ClipAnalyzer:
         self,
         clip: VideoClip,
         upload_folder: str = "./uploads",
-        force: bool = False
+        force: bool = False,
+        use_prompt_fallback: bool = True
     ) -> Dict[str, Any]:
-        """Analyze a single clip and persist results."""
+        """Analyze a single clip and persist results.
+        
+        Args:
+            clip: The VideoClip to analyze
+            upload_folder: Base folder for uploads
+            force: Whether to re-analyze already analyzed clips
+            use_prompt_fallback: If True, infer analysis from generation prompt when vision fails
+        """
 
         if clip.status != 'complete':
             return {
@@ -69,8 +77,31 @@ class ClipAnalyzer:
                 'reason': 'Existing analysis preserved'
             }
 
+        # Try to infer from generation prompt first (fast, free, no API call)
+        if use_prompt_fallback and clip.prompt:
+            prompt_analysis = self._analyze_from_prompt(clip)
+            if prompt_analysis:
+                self._persist_analysis(clip, prompt_analysis, frames_used=0)
+                return {
+                    'success': True,
+                    'clip_id': clip.id,
+                    'method': 'prompt_inference',
+                    'analysis': prompt_analysis
+                }
+
         frames = self._gather_visual_inputs(clip, upload_folder)
         if not frames:
+            # Even without frames, try prompt-based analysis as last resort
+            if use_prompt_fallback and clip.prompt:
+                prompt_analysis = self._analyze_from_prompt(clip)
+                if prompt_analysis:
+                    self._persist_analysis(clip, prompt_analysis, frames_used=0)
+                    return {
+                        'success': True,
+                        'clip_id': clip.id,
+                        'method': 'prompt_inference_fallback',
+                        'analysis': prompt_analysis
+                    }
             return {
                 'success': False,
                 'clip_id': clip.id,
@@ -304,6 +335,91 @@ class ClipAnalyzer:
         if not success:
             return None
         return base64.b64encode(buffer.tobytes()).decode('utf-8')
+
+    def _analyze_from_prompt(self, clip: VideoClip) -> Optional[Dict[str, Any]]:
+        """Infer clip analysis from the generation prompt (no API call needed).
+        
+        Uses keyword matching on the prompt to determine role, objects, setting, etc.
+        This is fast and free, good enough for clip ordering.
+        
+        Args:
+            clip: The VideoClip with a prompt
+            
+        Returns:
+            Analysis dict similar to AI vision output, or None if can't infer
+        """
+        prompt = (clip.prompt or '').lower()
+        if not prompt:
+            return None
+        
+        # Determine role from prompt keywords
+        role_keywords = {
+            'hook': ['hook', 'attention', 'eye-catching', 'opening', 'stop scroll', 'curious'],
+            'problem': ['problem', 'pain', 'struggle', 'before', 'frustrat', 'annoying'],
+            'solution': ['solution', 'solves', 'fix', 'transform', 'how it works', 'product'],
+            'benefits': ['benefit', 'satisfaction', 'happy', 'enjoy', 'lifestyle', 'aspirational'],
+            'social_proof': ['social proof', 'people enjoying', 'community', 'others', 'trust'],
+            'cta': ['cta', 'call to action', 'closing', 'final', 'front and center', 'memorable']
+        }
+        
+        # Score each role
+        role_scores = {role: sum(1 for kw in keywords if kw in prompt) 
+                       for role, keywords in role_keywords.items()}
+        primary_role = max(role_scores, key=role_scores.get) if max(role_scores.values()) > 0 else 'general'
+        
+        # Extract objects (nouns after "product" or common product terms)
+        objects = ['product']
+        if 'kitchen' in prompt:
+            objects.append('kitchen')
+        if 'counter' in prompt or 'countertop' in prompt:
+            objects.append('countertop')
+        if 'hand' in prompt:
+            objects.append('hands')
+        
+        # Determine setting
+        setting_keywords = {
+            'kitchen': ['kitchen', 'counter', 'cooking'],
+            'lifestyle': ['lifestyle', 'home', 'living room'],
+            'studio': ['studio', 'minimal', 'white background'],
+            'outdoor': ['outdoor', 'nature', 'garden']
+        }
+        setting = 'product showcase'
+        for setting_name, keywords in setting_keywords.items():
+            if any(kw in prompt for kw in keywords):
+                setting = setting_name
+                break
+        
+        # Determine mood from style descriptors
+        mood = 'professional'
+        if 'elegant' in prompt or 'premium' in prompt:
+            mood = 'elegant and premium'
+        elif 'dynamic' in prompt or 'energetic' in prompt:
+            mood = 'energetic and engaging'
+        elif 'calm' in prompt or 'peaceful' in prompt:
+            mood = 'calm and serene'
+        
+        # Generate tags
+        tags = [primary_role, 'product', 'ai-generated']
+        if 'kitchen' in prompt:
+            tags.append('kitchen')
+        if 'close-up' in prompt or 'detail' in prompt:
+            tags.append('close-up')
+        if 'lighting' in prompt:
+            tags.append('well-lit')
+        
+        return {
+            'description': f"AI-generated clip: {clip.prompt[:150]}..." if len(clip.prompt) > 150 else f"AI-generated clip: {clip.prompt}",
+            'primary_category': primary_role,
+            'content_type_confidence': 0.7,
+            'objects': objects,
+            'actions': ['showcasing', 'demonstrating'] if 'demo' in prompt else ['showcasing'],
+            'setting': setting,
+            'visual_elements': ['product-focused', 'marketing'],
+            'mood': mood,
+            'tags': tags[:8],
+            'quality_score': 7,
+            'recommended_role': primary_role
+        }
 
     def _persist_analysis(self, clip: VideoClip, analysis: Dict[str, Any], frames_used: int) -> None:
         metadata = clip.analysis_metadata or {}
