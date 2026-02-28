@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from pathlib import Path
 
+from PIL import Image
 from flask import current_app, request
 
 from app import db
@@ -143,7 +144,6 @@ class VideoClipManager:
             Path to processed image (local path), or None if processing fails
         """
         try:
-            from PIL import Image
             import io
             import numpy as np
             
