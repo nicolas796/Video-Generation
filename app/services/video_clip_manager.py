@@ -164,7 +164,8 @@ class VideoClipManager:
         product_images = self._get_product_images(product)
         
         # Use GPT-4o Vision-powered prompt generator
-        generator = ClipPromptGenerator(api_key=self.api_key)
+        # Don't pass Pollo API key - ClipPromptGenerator will use OPENAI_API_KEY from env
+        generator = ClipPromptGenerator()
         
         try:
             clips_config = generator.generate_clip_prompts(
