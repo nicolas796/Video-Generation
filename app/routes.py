@@ -1655,6 +1655,116 @@ The image should be visually striking, professionally composed, and suitable as 
     return prompt
 
 
+def _generate_scene_for_clip(use_case, product, script, scene_template, custom_description, upload_folder):
+    """Generate a scene image combining product with scene template context.
+    
+    Uses DALL-E 3 to create a contextual scene image that places the product
+    in the selected environment.
+    
+    Args:
+        use_case: UseCase model
+        product: Product model  
+        script: Script model (optional)
+        scene_template: Template key or 'ai-suggested'
+        custom_description: Additional user description
+        upload_folder: Upload folder path
+        
+    Returns:
+        Dict with success, local_url, and prompt
+    """
+    try:
+        import openai
+        import time
+        
+        # Define scene templates
+        scene_templates = {
+            'kitchen': 'Product elegantly placed on marble kitchen counter, warm morning sunlight streaming through window, fresh ingredients and coffee cup nearby, inviting domestic atmosphere',
+            'beauty': 'Product on pristine bathroom vanity counter, soft diffused spa lighting, candles and plush white towels, elegant self-care setting',
+            'outdoor': 'Product in natural outdoor setting during golden hour, soft focus greenery and trees in background, warm sunlight, lifestyle photography',
+            'mountain': 'Product held naturally by person near majestic mountain waterfall, pristine nature setting, crystal clear water, adventure and purity atmosphere',
+            'desk': 'Product on modern minimalist desk setup, laptop and notebook nearby, clean professional workspace, natural window light',
+            'living': 'Product on wooden coffee table in cozy living room, warm ambient lighting, comfortable sofa visible, inviting home atmosphere',
+            'hands': 'Close-up of hands naturally holding and using the product, shallow depth of field, lifestyle context, authentic moment',
+            'studio': 'Product on clean gradient background, professional studio lighting with soft shadows, sharp focus, commercial product photography'
+        }
+        
+        # Get scene context
+        scene_context = None
+        if scene_template == 'ai-suggested':
+            scene_context = _generate_ai_scene_suggestion(product, script)
+        else:
+            scene_context = scene_templates.get(scene_template, scene_templates['studio'])
+        
+        # Add custom description
+        if custom_description:
+            scene_context += f". {custom_description}"
+        
+        # Build the DALL-E prompt
+        product_name = product.name or 'product'
+        product_desc = product.description or ''
+        
+        dalle_prompt = f"""{scene_context}
+
+The product "{product_name}" ({product_desc[:80]}) is featured naturally in this scene. Professional photography, photorealistic quality, cinematic composition. No text, no logos, no watermarks. Suitable as a starting frame for video advertisement."""
+        
+        # Generate image
+        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            return {'success': False, 'error': 'OpenAI API key not configured'}
+        
+        http_client = None
+        try:
+            import httpx
+            http_client = httpx.Client(timeout=60.0, follow_redirects=True)
+        except Exception:
+            pass
+        
+        if http_client:
+            client = openai.OpenAI(api_key=api_key, http_client=http_client)
+        else:
+            client = openai.OpenAI(api_key=api_key)
+        
+        current_app.logger.info(f'Generating scene image with template: {scene_template}')
+        
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=dalle_prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1
+        )
+        
+        image_url = response.data[0].url
+        
+        # Download and save locally
+        import requests
+        scene_folder = os.path.join(upload_folder, 'scenes', str(use_case.id))
+        os.makedirs(scene_folder, exist_ok=True)
+        
+        timestamp = int(time.time())
+        filename = f"scene_clip_{timestamp}.png"
+        filepath = os.path.join(scene_folder, filename)
+        
+        img_response = requests.get(image_url, timeout=30)
+        img_response.raise_for_status()
+        
+        with open(filepath, 'wb') as f:
+            f.write(img_response.content)
+        
+        relative_path = f"/uploads/scenes/{use_case.id}/{filename}"
+        
+        return {
+            'success': True,
+            'local_url': relative_path,
+            'prompt': dalle_prompt
+        }
+        
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"Scene generation for clip failed: {e}\n{traceback.format_exc()}")
+        return {'success': False, 'error': str(e)}
+
+
 def build_scene_prompt_with_context(product, use_case, script, custom_description, scene_context, clip_count):
     """Build a scene prompt using pre-defined or AI-suggested scene context.
     
@@ -1767,6 +1877,26 @@ def generate_video_clips(use_case_id):
         if remaining_clips <= 0:
             return jsonify({'error': f'All {target_clips} clips already generated. Delete one to regenerate.'}), 400
         
+        # Check if scene template is provided - generate scene image first
+        scene_template = data.get('scene_template')
+        custom_description = data.get('custom_description', '')
+        selected_image_url = data.get('selected_image_url')
+        generated_scene_image_url = None
+        
+        if scene_template and selected_image_url:
+            # Generate scene image combining product with scene context
+            scene_result = _generate_scene_for_clip(
+                use_case=use_case,
+                product=product,
+                script=script,
+                scene_template=scene_template,
+                custom_description=custom_description,
+                upload_folder=upload_folder
+            )
+            if scene_result and scene_result.get('success'):
+                generated_scene_image_url = scene_result.get('local_url')
+                current_app.logger.info(f'Generated scene image for clips: {generated_scene_image_url}')
+        
         # Use GPT-4o Vision to generate context-aware prompts
         clips_config = manager.generate_clip_prompts(
             use_case=use_case,
@@ -1780,7 +1910,6 @@ def generate_video_clips(use_case_id):
         queued_clips = []
         
         # Pollo.ai has rate limits - generate clips sequentially with delays
-        # Most video generation APIs allow ~1 concurrent job and need cooldown between requests
         DELAY_BETWEEN_CLIPS = 3  # seconds between starting each clip
         MAX_RETRIES = 2
         
@@ -1796,34 +1925,26 @@ def generate_video_clips(use_case_id):
             clip_type = clip_config['clip_type']
             
             # Get the image URL for this clip
-            # Priority: 1) User-selected product image URL, 2) Generated scene URL, 3) Auto-selected product image
+            # Priority: 1) Generated scene image (if template selected), 2) User-selected product image URL
             image_url = None
             
-            # Check if user selected a specific product image URL
-            selected_image_url = data.get('selected_image_url')
-            if selected_image_url:
-                # Use the remote/public URL directly (must be http/https for Pollo.ai)
+            # Use generated scene image if available
+            if generated_scene_image_url:
+                # Convert local path to full URL for Pollo.ai
+                external_base = os.getenv('EXTERNAL_BASE_URL', '')
+                if external_base:
+                    image_url = external_base.rstrip('/') + generated_scene_image_url
+                else:
+                    image_url = generated_scene_image_url
+                current_app.logger.info(f'Using generated scene image for clip {clip_index}')
+            
+            # Fall back to selected product image URL
+            if not image_url and selected_image_url:
                 if selected_image_url.startswith(('http://', 'https://')):
                     image_url = selected_image_url
-                    current_app.logger.info(f'Using user-selected image URL for clip {clip_index}', 
-                                          image_url=image_url[:100] + '...' if len(image_url) > 100 else image_url)
+                    current_app.logger.info(f'Using selected product image for clip {clip_index}')
             
-            # Check if user provided a generated scene URL
-            if not image_url:
-                generated_scene_url = data.get('generated_scene_url')
-                if generated_scene_url:
-                    # For local files, we need to construct the full URL for Pollo.ai
-                    if generated_scene_url.startswith('/uploads/'):
-                        external_base = os.getenv('EXTERNAL_BASE_URL', '')
-                        if external_base:
-                            image_url = external_base.rstrip('/') + generated_scene_url
-                        else:
-                            # Try to construct from request host
-                            image_url = generated_scene_url
-                    else:
-                        image_url = generated_scene_url
-            
-            # Fall back to product images if no image selected yet
+            # Fall back to product images if nothing selected
             if not image_url and product.images:
                 if isinstance(product.images, list) and len(product.images) > 0:
                     image_index = clip_index % len(product.images)
