@@ -176,7 +176,8 @@ def _download_clip_assets(clip: VideoClip, video_url: str) -> Dict[str, Optional
     use_case_str = str(clip.use_case_id)
     clip_folder = os.path.join(upload_root, 'clips', use_case_str)
     os.makedirs(clip_folder, exist_ok=True)
-    video_filename = f"clip_{clip.id}.mp4"
+    # Use consistent filename format matching video_clip_manager.py
+    video_filename = f"clip_{clip.id:03d}_{clip.sequence_order:02d}.mp4"
     video_path = os.path.join(clip_folder, video_filename)
     response = requests.get(video_url, stream=True, timeout=120)
     response.raise_for_status()
