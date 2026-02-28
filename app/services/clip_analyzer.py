@@ -123,13 +123,41 @@ class ClipAnalyzer:
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=90
+                timeout=30  # Reduced from 90s to prevent worker timeouts
             )
             response.raise_for_status()
             raw_content = response.json()['choices'][0]['message']['content']
             analysis = json.loads(raw_content)
+        except requests.exceptions.Timeout:
+            # AI vision timed out - for uploaded videos, create basic analysis
+            if is_uploaded_video:
+                basic_analysis = self._create_basic_uploaded_analysis(clip)
+                self._persist_analysis(clip, basic_analysis, frames_used=len(frames))
+                return {
+                    'success': True,
+                    'clip_id': clip.id,
+                    'method': 'basic_uploaded_fallback',
+                    'warning': 'AI vision timed out, using basic analysis',
+                    'analysis': basic_analysis
+                }
+            return {
+                'success': False,
+                'clip_id': clip.id,
+                'error': 'AI vision analysis timed out after 30 seconds'
+            }
         except requests.exceptions.RequestException as exc:
             detail = self._extract_http_error(exc)
+            # For uploaded videos, don't fail completely - use basic analysis
+            if is_uploaded_video:
+                basic_analysis = self._create_basic_uploaded_analysis(clip)
+                self._persist_analysis(clip, basic_analysis, frames_used=len(frames))
+                return {
+                    'success': True,
+                    'clip_id': clip.id,
+                    'method': 'basic_uploaded_fallback',
+                    'warning': f'AI vision failed ({detail}), using basic analysis',
+                    'analysis': basic_analysis
+                }
             return {
                 'success': False,
                 'clip_id': clip.id,
@@ -423,6 +451,32 @@ class ClipAnalyzer:
             'tags': tags[:8],
             'quality_score': 7,
             'recommended_role': primary_role
+        }
+
+    def _create_basic_uploaded_analysis(self, clip: VideoClip) -> Dict[str, Any]:
+        """Create a basic analysis for uploaded videos when AI vision fails.
+        
+        This provides minimal viable analysis so the clip can still be used
+        in sequencing, even if we couldn't run full AI vision on it.
+        
+        Args:
+            clip: The uploaded VideoClip
+            
+        Returns:
+            Basic analysis dict with generic tags
+        """
+        return {
+            'description': f"User uploaded video clip (duration: {clip.duration or 5}s)",
+            'primary_category': 'general',
+            'content_type_confidence': 0.5,
+            'objects': ['product'],
+            'actions': ['showcasing'],
+            'setting': 'custom scene',
+            'visual_elements': ['user-provided content'],
+            'mood': 'neutral',
+            'tags': ['uploaded', 'user-content', 'custom', 'product'],
+            'quality_score': 6,
+            'recommended_role': 'general'
         }
 
     def _persist_analysis(self, clip: VideoClip, analysis: Dict[str, Any], frames_used: int) -> None:
