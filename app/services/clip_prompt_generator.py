@@ -348,9 +348,13 @@ RULES:
         # Add scene context if provided
         scene_context_text = ""
         scene_instruction = ""
+        scene_context_text = ""
         if hasattr(self, '_scene_context') and self._scene_context:
             scene_context_text = f"\n=== SCENE CONTEXT ===\nThe product should appear {self._scene_context}\n"
             scene_instruction = "5. Incorporates the scene context provided above"
+
+        # Pre-format specs to avoid nested f-string issues
+        specs_str = ', '.join(['{}: {}'.format(k, v) for k, v in list(product_specs.items())[:3]]) if product_specs else 'N/A'
 
         text_content = f"""=== CLIP INFORMATION ===
 Clip Position: {clip_index + 1} of {total_clips}
@@ -362,7 +366,7 @@ Video Format: {format_descriptors.get(video_format, video_format)}
 === PRODUCT ===
 Name: {product_name}
 Description: {product_desc[:200] if product_desc else 'N/A'}
-Key Specs: {', '.join([f"{k}: {v}" for k, v in list(product_specs.items())[:3]]) if product_specs else 'N/A'}
+Key Specs: {specs_str}
 {scene_context_text}
 === SCRIPT FOR THIS CLIP ===
 "{script_segment}"
