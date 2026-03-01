@@ -9,6 +9,12 @@ echo "Building Product Video Generator..."
 echo "Started at: $(date)"
 echo "=========================================="
 
+# Clear Python cache to ensure fresh code
+echo "Clearing Python cache..."
+find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+find . -name "*.pyc" -delete 2>/dev/null || true
+echo "✓ Cache cleared"
+
 # Install Python dependencies
 echo "Installing dependencies..."
 pip install -r requirements.txt

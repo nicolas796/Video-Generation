@@ -94,11 +94,9 @@ services:
           name: product-video-db
           property: connectionString
       
+      # Explicit Redis URL for Celery broker
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: video-tasks-redis
-          property: connectionString
+        value: "redis://red-d6hqhb1drdic73cq0pn0:6379/0"
       
       - key: FLASK_ENV
         value: production
