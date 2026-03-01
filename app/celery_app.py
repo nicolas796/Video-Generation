@@ -8,15 +8,18 @@ celery = Celery('product_video_generator')
 def make_celery(app=None):
     """Configure the global Celery instance and optionally bind Flask context."""
     # Get Redis URL from environment or use local Redis
+    # Render Redis URL - hardcoded fallback for production
+    render_redis_url = 'redis://red-d6hqhb1drdic73cq0pn0:6379/0'
+    
     broker_url = os.getenv(
         'CELERY_BROKER_URL',
-        os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    )
+        os.getenv('REDIS_URL', render_redis_url)
+    ) or render_redis_url
     
     result_backend = os.getenv(
         'CELERY_RESULT_BACKEND',
-        os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-    )
+        os.getenv('REDIS_URL', render_redis_url)
+    ) or render_redis_url
     
     # Base configuration (lowercase keys for Celery 6.0 compatibility)
     celery.conf.update(
