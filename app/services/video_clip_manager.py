@@ -63,6 +63,9 @@ class VideoClipManager:
     def _log_debug(self, message: str, **context):
         self._log(logging.DEBUG, message, **context)
 
+    def _log_warning(self, message: str, **context):
+        self._log(logging.WARNING, message, **context)
+
     def _build_webhook_url(self) -> Optional[str]:
         """Return the absolute webhook URL if available."""
         base_url = None
@@ -143,15 +146,27 @@ class VideoClipManager:
         Returns:
             Path to processed image (local path), or None if processing fails
         """
+        import io
+        import signal
+        
+        # Maximum time allowed for background removal (seconds)
+        # Must be well under gunicorn's 30s timeout
+        MAX_BG_REMOVAL_TIME = 8
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f'Background removal exceeded {MAX_BG_REMOVAL_TIME} seconds')
+        
         try:
-            import io
-            import numpy as np
-            
-            # Download or load the image
+            # Download or load the image with short timeout
             if image_url.startswith(('http://', 'https://')):
-                response = requests.get(image_url, timeout=10)
-                response.raise_for_status()
-                img = Image.open(io.BytesIO(response.content))
+                try:
+                    response = requests.get(image_url, timeout=5)
+                    response.raise_for_status()
+                    img = Image.open(io.BytesIO(response.content))
+                except requests.exceptions.RequestException as e:
+                    self._log_warning(f'Failed to download image, will retry with original: {e}',
+                                    clip_id=clip_id, image_url=image_url[:50])
+                    return None
             else:
                 # Local path
                 local_path = image_url
@@ -162,35 +177,58 @@ class VideoClipManager:
             # Check if image has white/plain background
             has_white_bg = self._detect_white_background(img)
             
-            if has_white_bg:
-                self._log_info('Image has white background, removing it for better video generation',
-                             clip_id=clip_id)
-                
-                # Remove background using rembg
-                from rembg import remove
-                
-                # Remove background (returns RGBA image)
-                output_img = remove(img)
-                
-                # Save processed image to clips folder
-                processed_folder = os.path.join(self.clips_folder, 'processed')
-                os.makedirs(processed_folder, exist_ok=True)
-                
-                processed_path = os.path.join(processed_folder, f'clip_{clip_id}_nobg.png')
-                output_img.save(processed_path, 'PNG')
-                
-                self._log_info(f'Background removed, saved to {processed_path}',
-                             clip_id=clip_id)
-                
-                # Convert to full public URL for Pollo.ai
-                rel_path = os.path.relpath(processed_path, self.upload_folder)
-                full_url = self._ensure_public_url(f'/uploads/{rel_path}')
-                return full_url
-            else:
+            if not has_white_bg:
                 # Image has natural background, use as-is
                 self._log_info('Image has natural background, using as-is',
                              clip_id=clip_id)
                 return None  # Signal to use original image_url
+            
+            self._log_info('Image has white background, attempting removal',
+                         clip_id=clip_id)
+            
+            # Try background removal with timeout
+            try:
+                # Set alarm for timeout (Unix only, but Render uses Linux)
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(MAX_BG_REMOVAL_TIME)
+                
+                try:
+                    from rembg import remove
+                    
+                    # Remove background (returns RGBA image)
+                    output_img = remove(img)
+                    
+                    # Disable alarm
+                    signal.alarm(0)
+                    
+                    # Save processed image to clips folder
+                    processed_folder = os.path.join(self.clips_folder, 'processed')
+                    os.makedirs(processed_folder, exist_ok=True)
+                    
+                    processed_path = os.path.join(processed_folder, f'clip_{clip_id}_nobg.png')
+                    output_img.save(processed_path, 'PNG')
+                    
+                    self._log_info(f'Background removed successfully',
+                                 clip_id=clip_id, path=processed_path)
+                    
+                    # Convert to full public URL for Pollo.ai
+                    rel_path = os.path.relpath(processed_path, self.upload_folder)
+                    full_url = self._ensure_public_url(f'/uploads/{rel_path}')
+                    return full_url
+                    
+                except TimeoutError as te:
+                    self._log_warning(f'Background removal timed out, using original image',
+                                    clip_id=clip_id)
+                    return None
+                    
+            except ImportError:
+                self._log_warning('rembg not available, using original image',
+                                clip_id=clip_id)
+                return None
+            except Exception as e:
+                self._log_warning(f'Background removal failed: {e}, using original',
+                                clip_id=clip_id)
+                return None
                 
         except Exception as e:
             self._log_error(f'Failed to prepare image for video: {e}',
