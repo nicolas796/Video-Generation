@@ -5,8 +5,16 @@ from celery import Celery
 # Get Redis URL - check environment first, then hardcoded fallback for Render
 render_redis_url = 'redis://red-d6hqhb1drdic73cq0pn0:6379/0'
 
+# Debug: Log what we're seeing
+import sys
+print(f"DEBUG CELERY: CELERY_BROKER_URL={os.getenv('CELERY_BROKER_URL')}", file=sys.stderr)
+print(f"DEBUG CELERY: REDIS_URL={os.getenv('REDIS_URL')}", file=sys.stderr)
+
 broker_url = os.getenv('CELERY_BROKER_URL') or os.getenv('REDIS_URL') or render_redis_url
 result_backend = os.getenv('CELERY_RESULT_BACKEND') or os.getenv('REDIS_URL') or render_redis_url
+
+print(f"DEBUG CELERY: Using broker={broker_url}", file=sys.stderr)
+print(f"DEBUG CELERY: Using backend={result_backend}", file=sys.stderr)
 
 # Create and configure Celery instance
 celery = Celery(
