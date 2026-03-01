@@ -17,8 +17,8 @@ openai==1.30.0
 beautifulsoup4==4.12.3
 
 # Image Processing
-Pillow==10.2.0
-rembg==2.0.50  # Background removal for product images
+Pillow==12.1.1
+rembg==2.0.72  # Background removal for product images (py3.14-compatible)
 
 # Video Processing
 ffmpeg-python==0.2.0
@@ -27,7 +27,7 @@ numpy==1.26.4  # Pinned for OpenCV compatibility
 
 # Database
 SQLAlchemy==2.0.23
-psycopg2-binary==2.9.9  # PostgreSQL adapter for production
+psycopg[binary]==3.2.1  # PostgreSQL adapter (psycopg3) for production, py3.14-compatible
 
 # Production WSGI Server
 gunicorn==21.2.0

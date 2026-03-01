@@ -1,12 +1,13 @@
 """Async video assembly tasks using Celery."""
 import os
-import time
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
 from celery import states
 from celery.exceptions import SoftTimeLimitExceeded
+from flask import current_app
 
 from app import db
-from app.models import UseCase, Script, FinalVideo
+from app.models import UseCase, Script
 from app.celery_app import celery
 
 
@@ -15,7 +16,7 @@ def assemble_final_video_async(
     self,
     use_case_id: int,
     script_id: int,
-    options: Dict[str, Any]
+    options: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Assemble final video in the background.
     
@@ -38,10 +39,10 @@ def assemble_final_video_async(
     Returns:
         Dict with result info
     """
-    from flask import current_app
     from app.services.smart_assembly import SmartVideoAssembler
     from app.services.voiceover import VoiceoverGenerator
     
+    options = options or {}
     upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
     ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
     
@@ -57,8 +58,8 @@ def assemble_final_video_async(
         )
         
         # Get use case and script
-        use_case = UseCase.query.get(use_case_id)
-        script = Script.query.get(script_id)
+        use_case = db.session.get(UseCase, use_case_id)
+        script = db.session.get(Script, script_id)
         
         if not use_case or not script:
             raise ValueError("Use case or script not found")
@@ -79,20 +80,28 @@ def assemble_final_video_async(
         voiceover_path = options.get('voiceover_path')
         include_voiceover = options.get('include_voiceover', True)
         
-        if include_voiceover and not voiceover_path:
-            generator = VoiceoverGenerator(
-                api_key=current_app.config.get('ELEVENLABS_API_KEY'),
-                upload_folder=upload_folder,
-                ffmpeg_path=ffmpeg_path
-            )
-            voiceover_result = generator.generate_voiceover(
-                use_case=use_case,
-                script=script,
-                force=options.get('force_voiceover', False),
-                background_music=options.get('background_music')
-            )
-            if voiceover_result.get('success'):
+        if include_voiceover:
+            if not voiceover_path:
+                generator = VoiceoverGenerator(
+                    api_key=current_app.config.get('ELEVENLABS_API_KEY'),
+                    upload_folder=upload_folder,
+                    ffmpeg_path=ffmpeg_path
+                )
+                voiceover_result = generator.generate_voiceover(
+                    use_case=use_case,
+                    script=script,
+                    force=options.get('force_voiceover', False),
+                    background_music=options.get('background_music')
+                )
+                if not voiceover_result.get('success'):
+                    raise RuntimeError(voiceover_result.get('error', 'Voiceover generation failed'))
                 voiceover_path = voiceover_result['file_path']
+            else:
+                resolved_voiceover = voiceover_path
+                if not os.path.isabs(resolved_voiceover):
+                    resolved_voiceover = os.path.join(upload_folder, resolved_voiceover)
+                if not os.path.exists(resolved_voiceover):
+                    raise FileNotFoundError(f"Voiceover file not found at {voiceover_path}")
         
         # Start assembly
         self.update_state(
@@ -109,17 +118,6 @@ def assemble_final_video_async(
             ffmpeg_path=ffmpeg_path
         )
         
-        # Update progress during assembly
-        def progress_callback(step: str, progress: int):
-            self.update_state(
-                state='PROGRESS',
-                meta={
-                    'step': step,
-                    'progress': 30 + (progress * 0.6),  # 30-90% range
-                    'message': f'Processing: {step}...'
-                }
-            )
-        
         # Run assembly
         assembly_result = assembler.assemble_use_case_smart(
             use_case=use_case,
@@ -132,7 +130,11 @@ def assemble_final_video_async(
         )
         
         if not assembly_result.get('success'):
-            raise Exception(assembly_result.get('error', 'Assembly failed'))
+            raise RuntimeError(assembly_result.get('error', 'Assembly failed'))
+        
+        final_video_data = assembly_result.get('final_video') or {}
+        if not final_video_data:
+            raise RuntimeError('Assembly completed without final video data')
         
         # Final processing
         self.update_state(
@@ -144,26 +146,20 @@ def assemble_final_video_async(
             }
         )
         
-        # Create FinalVideo record
-        final_video = FinalVideo(
-            use_case_id=use_case_id,
-            file_path=assembly_result['video_path'],
-            duration=assembly_result.get('duration', 0),
-            status='complete'
-        )
-        db.session.add(final_video)
-        db.session.commit()
-        
         # Complete
         return {
             'success': True,
-            'video_path': assembly_result['video_path'],
-            'duration': assembly_result.get('duration', 0),
-            'file_size': assembly_result.get('file_size', 0),
-            'final_video_id': final_video.id
+            'video_path': final_video_data.get('file_path'),
+            'video_url': final_video_data.get('video_url'),
+            'duration': final_video_data.get('duration'),
+            'file_size': final_video_data.get('file_size'),
+            'final_video_id': final_video_data.get('id'),
+            'final_video': final_video_data,
+            'assembly_info': assembly_result.get('assembly_info')
         }
         
     except SoftTimeLimitExceeded:
+        db.session.rollback()
         self.update_state(
             state=states.FAILURE,
             meta={
@@ -175,8 +171,8 @@ def assemble_final_video_async(
         raise
         
     except Exception as exc:
-        # Log error and retry
-        current_app.logger.error(f"Assembly failed: {exc}")
+        db.session.rollback()
+        current_app.logger.exception("Assembly failed")
         
         # Update state to show error
         self.update_state(

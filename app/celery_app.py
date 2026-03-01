@@ -2,15 +2,11 @@
 import os
 from celery import Celery
 
+# Single Celery instance shared across the app and worker processes
+celery = Celery('product_video_generator')
+
 def make_celery(app=None):
-    """Create and configure Celery app.
-    
-    Args:
-        app: Optional Flask app for context
-        
-    Returns:
-        Configured Celery instance
-    """
+    """Configure the global Celery instance and optionally bind Flask context."""
     # Get Redis URL from environment or use local Redis
     broker_url = os.getenv(
         'CELERY_BROKER_URL',
@@ -22,15 +18,12 @@ def make_celery(app=None):
         os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     )
     
-    celery = Celery(
-        'product_video_generator',
-        broker=broker_url,
-        backend=result_backend,
-        include=['app.tasks.video_tasks']
-    )
-    
-    # Celery configuration
+    # Base configuration
     celery.conf.update(
+        broker_url=broker_url,
+        result_backend=result_backend,
+        imports=['app.tasks.video_tasks'],
+        
         # Task serialization
         task_serializer='json',
         accept_content=['json'],
@@ -63,16 +56,20 @@ def make_celery(app=None):
     if app:
         celery.conf.update(app.config)
         
-        # Add Flask context to tasks
-        class ContextTask(celery.Task):
+        # Add Flask context to tasks so current_app/db work inside Celery workers
+        TaskBase = celery.Task
+
+        class ContextTask(TaskBase):
+            abstract = True
+
             def __call__(self, *args, **kwargs):
                 with app.app_context():
-                    return self.run(*args, **kwargs)
+                    return TaskBase.__call__(self, *args, **kwargs)
         
         celery.Task = ContextTask
     
     return celery
 
 
-# Create the Celery instance (will be initialized with Flask app in __init__.py)
-celery = make_celery()
+# Configure Celery with defaults immediately; Flask will call make_celery(app) later
+make_celery()
