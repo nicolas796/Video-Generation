@@ -115,14 +115,13 @@ class Config:
         or 'http://localhost:5000'
     )
     
-    # Celery / Redis Configuration (lowercase keys for Celery 6.0 compatibility)
-    # Environment variables CELERY_BROKER_URL/CELERY_RESULT_BACKEND are read but
-    # stored as lowercase config keys to avoid deprecation warnings
-    celery_broker_url = os.getenv(
+    # Celery / Redis Configuration
+    # Flask only exposes UPPERCASE config keys in app.config
+    CELERY_BROKER_URL = os.getenv(
         'CELERY_BROKER_URL',
         os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     )
-    celery_result_backend = os.getenv(
+    CELERY_RESULT_BACKEND = os.getenv(
         'CELERY_RESULT_BACKEND',
         os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     )

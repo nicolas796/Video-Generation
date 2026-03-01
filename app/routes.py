@@ -2743,8 +2743,24 @@ def assemble_final_video(use_case_id):
 
     # Check if Celery is available for async processing
     from app import celery as celery_app
+    celery_available = bool(celery_app and current_app.config.get('CELERY_AVAILABLE', False))
+    celery_disabled_reason = current_app.config.get('CELERY_DISABLED_REASON')
+    running_in_render = bool(os.getenv('RENDER'))
     
-    if celery_app:
+    if not celery_available and running_in_render:
+        current_app.logger.error(
+            'Async assembly is unavailable on Render: %s',
+            celery_disabled_reason or 'missing REDIS_URL/CELERY_BROKER_URL'
+        )
+        return jsonify({
+            'success': False,
+            'error': 'Background assembly service is not configured',
+            'details': celery_disabled_reason or 'Set REDIS_URL/CELERY_BROKER_URL to your Redis service connection string.',
+            'needs_configuration': True,
+            'hint': 'Link the Render web service to the Redis instance so Celery can queue long-running ffmpeg jobs.'
+        }), 503
+    
+    if celery_available:
         # Async processing via Celery
         try:
             from app.tasks.video_tasks import assemble_final_video_async
@@ -2832,11 +2848,13 @@ def assemble_final_video(use_case_id):
 def get_assembly_status(use_case_id, task_id):
     """Check the status of an async assembly job."""
     from app import celery as celery_app
+    celery_available = bool(celery_app and current_app.config.get('CELERY_AVAILABLE', False))
     
-    if not celery_app:
+    if not celery_available:
         return jsonify({
             'success': False,
-            'error': 'Async processing not available'
+            'error': 'Async processing not available',
+            'details': current_app.config.get('CELERY_DISABLED_REASON')
         }), 503
     
     try:
