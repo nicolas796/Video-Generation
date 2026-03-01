@@ -40,7 +40,7 @@ flask db heads || echo "Warning: Could not check migration heads"
 
 echo ""
 echo "Running flask db upgrade..."
-flask db upgrade --verbose 2>&1
+flask db upgrade 2>&1
 MIGRATION_STATUS=$?
 
 if [ $MIGRATION_STATUS -ne 0 ]; then
