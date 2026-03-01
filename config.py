@@ -34,6 +34,7 @@ def get_database_url():
     
     Render provides DATABASE_URL with 'postgres://' prefix,
     but SQLAlchemy requires 'postgresql://'. This function handles the conversion.
+    Also configures psycopg3 driver (not psycopg2) for SQLAlchemy.
     """
     database_url = os.getenv('DATABASE_URL')
     
@@ -45,6 +46,10 @@ def get_database_url():
     # Render uses postgres:// but SQLAlchemy requires postgresql://
     if database_url.startswith('postgres://'):
         database_url = database_url.replace('postgres://', 'postgresql://', 1)
+    
+    # Use psycopg3 driver (not psycopg2) - we have psycopg[binary] installed
+    if database_url.startswith('postgresql://'):
+        database_url = database_url.replace('postgresql://', 'postgresql+psycopg://', 1)
     
     return database_url
 
