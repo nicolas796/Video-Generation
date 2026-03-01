@@ -2096,12 +2096,6 @@ def generate_video_clips(use_case_id):
             'count': len(clip_configs_for_task),
             'status': 'queued'
         })
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'Failed to start any clip generation',
-                'errors': errors
-            }), 500
 
     except Exception as e:
         import traceback
