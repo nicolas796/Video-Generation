@@ -2061,8 +2061,8 @@ def generate_video_clips(use_case_id):
         queued_clips = []
 
         # Pollo.ai has rate limits - generate clips sequentially with delays
-        DELAY_BETWEEN_CLIPS = 3  # seconds between starting each clip
-        MAX_RETRIES = 2
+        DELAY_BETWEEN_CLIPS = 1  # Reduced from 3s to avoid timeout
+        MAX_RETRIES = 1  # Reduced from 2 to speed up generation
 
         # Generate requested number of clips with rate limiting
         for i in range(count):

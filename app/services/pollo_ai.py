@@ -185,7 +185,7 @@ class PolloAIClient:
     
     @api_retry(
         label="pollo_create_job",
-        config=RetryConfig(retries=4, base_delay=2.0, backoff=2.0, max_delay=45.0, jitter=0.25),
+        config=RetryConfig(retries=2, base_delay=1.0, backoff=2.0, max_delay=10.0, jitter=0.25),
         exceptions=(requests.exceptions.RequestException, ExternalAPIError)
     )
     def _make_create_request(self, url: str, payload: Dict[str, Any]) -> requests.Response:
@@ -194,7 +194,7 @@ class PolloAIClient:
             url,
             headers=self._get_headers(),
             json=payload,
-            timeout=60
+            timeout=10  # Reduced from 60 to avoid worker timeout
         )
         response.raise_for_status()
         return response
