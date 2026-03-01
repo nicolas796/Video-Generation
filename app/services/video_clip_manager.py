@@ -5,7 +5,7 @@ import logging
 import cv2
 import requests
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PIL import Image
@@ -837,16 +837,56 @@ class VideoClipManager:
         }
 
     def refresh_generating_clips(self, clips: List[VideoClip]) -> Dict[int, Dict[str, Any]]:
-        """Refresh all generating/pending clips with Pollo status."""
+        """Refresh all generating/pending clips with Pollo status.
+        
+        Also marks clips as error if they've been generating for too long (timeout).
+        """
         status_map: Dict[int, Dict[str, Any]] = {}
         dirty = False
+        
+        # Timeout for stuck generating clips (30 minutes)
+        GENERATION_TIMEOUT_MINUTES = 30
+        timeout_threshold = datetime.utcnow() - timedelta(minutes=GENERATION_TIMEOUT_MINUTES)
 
         for clip in clips:
-            if clip.status in ('generating', 'pending') and clip.pollo_job_id:
-                sync_result = self._sync_clip_with_pollo(clip)
-                status_map[clip.id] = sync_result
-                if sync_result.get('dirty'):
-                    dirty = True
+            if clip.status in ('generating', 'pending'):
+                # Check if clip has been generating for too long
+                if clip.status == 'generating' and clip.created_at:
+                    if clip.created_at < timeout_threshold:
+                        self._log_error('Clip generation timed out', 
+                                       clip_id=clip.id, 
+                                       created_at=clip.created_at.isoformat(),
+                                       timeout_minutes=GENERATION_TIMEOUT_MINUTES)
+                        clip.status = 'error'
+                        clip.error_message = f'Generation timed out after {GENERATION_TIMEOUT_MINUTES} minutes'
+                        dirty = True
+                        status_map[clip.id] = {
+                            'success': False,
+                            'error': 'Generation timed out',
+                            'pollo_status': 'timeout',
+                            'dirty': True
+                        }
+                        continue
+                
+                # Only sync with Pollo if we have a job ID
+                if clip.pollo_job_id:
+                    sync_result = self._sync_clip_with_pollo(clip)
+                    status_map[clip.id] = sync_result
+                    if sync_result.get('dirty'):
+                        dirty = True
+                else:
+                    # No pollo_job_id but clip is generating/pending - mark as error
+                    if clip.status in ('generating', 'pending'):
+                        self._log_error('Clip has no Pollo job ID', clip_id=clip.id)
+                        clip.status = 'error'
+                        clip.error_message = 'No generation job found (may have been lost)'
+                        dirty = True
+                        status_map[clip.id] = {
+                            'success': False,
+                            'error': 'No Pollo job ID',
+                            'pollo_status': 'missing_job_id',
+                            'dirty': True
+                        }
 
         if dirty:
             db.session.commit()

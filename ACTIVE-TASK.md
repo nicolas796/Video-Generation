@@ -1,140 +1,80 @@
-# Phase 10: Final Review & Refactoring – COMPLETE ✅
+# Video Generator Dashboard Fix - COMPLETED ✅
 
-## Highlights
-- [x] **End-to-End Code Review** – audited every Python module with emphasis on services and routes. Identified and fixed the `PolloAIClient` indentation bug that left helper methods outside the class (broken logging + retry plumbing), confirmed retry coverage, and documented remaining edge cases.
-- [x] **Refactoring & Naming Pass** – normalized helper methods in `app/services/pollo_ai.py`, ensured structured logging helpers live inside the class, and cleaned duplicate imports. Verified other services already expose docstrings + helper methods.
-- [x] **Documentation Refresh** – authored a full `README.md` (setup, env vars, pipeline walkthrough, API reference, CLI examples, operational notes) plus `FINAL_SUMMARY.md` for stakeholders.
-- [x] **Status Reporting** – captured outcomes + run instructions inside `FINAL_SUMMARY.md` and updated this ACTIVE-TASK log.
+**Date:** March 1, 2026  
+**Task:** Fix dashboard to show actual user progress through the pipeline
 
-## Pending / Nice-to-haves
-- Optional pass to consolidate duplicate clip reorder endpoints in `routes.py`.
-- Expand automated test coverage beyond the smoke suite if time permits.
+## Problems Fixed
 
-# Phase 9: Polish - Error Handling & Recovery - COMPLETE ✅
+### 1. Main dashboard didn't show user's current project status
+- **Fix:** Updated `/api/dashboard/status` endpoint in `app/routes.py` to properly detect active/incomplete products and return correct stage information
+- The endpoint now properly maps internal pipeline stages to UI stages
+- Added proper progress percentage calculation (14.3%, 28.6%, 42.9%, 57.1%, 71.4%, 85.7%, 100%)
 
-## Overview
-Final phase focused on robustness: error handling, retry logic, user-friendly messages, partial progress recovery, and testing.
+### 2. Clicking pipeline steps stayed on homepage
+- **Fix:** Updated `templates/index.html` to:
+  - Remove conflicting `onclick` handlers from stage links
+  - Set proper `href` attributes dynamically via JavaScript after dashboard data loads
+  - Each stage now navigates to the correct URL based on the most recent project
 
-## Status: ✅ COMPLETE
+### 3. Users couldn't see which steps they've completed
+- **Fix:** Updated JavaScript to properly apply CSS classes:
+  - `complete` class for stages before current stage (green)
+  - `active` class for current stage (blue with pulse animation)
+  - Default style for pending stages (gray)
+- Progress bar now shows actual completion percentage with gradient
 
----
+### 4. Had to manually navigate via URLs
+- **Fix:** Stage links now have proper URLs set dynamically:
+  - Scrape: `/scrape`
+  - Use Case: `/use-case/{product_id}`
+  - Script: `/script/{use_case_id}` (or falls back to use-case if no use case exists)
+  - Video Gen: `/video-gen/{use_case_id}`
+  - Assembly: `/assembly/{use_case_id}`
+  - Output: `/output/{use_case_id}`
 
-## Completed Tasks
+## Changes Made
 
-### 1. Error Handling & Retry Logic ✅
-- [x] Retry decorator with exponential backoff exists (app/utils/retry.py)
-- [x] Applied retry decorators to Pollo.ai API calls:
-  - `_make_create_request()`: 4 retries, base_delay=2.0s, backoff=2.0, max_delay=45s
-  - `_make_status_request()`: 3 retries, base_delay=1.5s, backoff=2.0, max_delay=30s
-- [x] Wrap network operations in try/except with user-friendly error messages
-- [x] Handle ffmpeg errors gracefully (FFmpegError class with specific error categorization)
-- [x] Add DB transaction rollback on failures (video_clip_manager, routes)
+### app/routes.py
+- Rewrote `get_dashboard_status()` endpoint with improved stage detection logic
+- Consolidated stage mapping into a single `get_stage_info()` helper function
+- Fixed progress percentages to match 6-stage pipeline
+- Properly detects incomplete vs complete projects
 
-**Files Modified:**
-- `app/services/pollo_ai.py` - Added `@api_retry` decorators and `_get_user_friendly_error()`
-- `app/services/video_clip_manager.py` - Enhanced error handling with ExternalAPIError/NonRetryableAPIError
-- `app/services/video_assembly.py` - Added FFmpegError class with user-friendly messages
-- `app/routes.py` - Added DB rollback in webhook handler
+### templates/index.html
+- Removed 7th stage (Spec Sheet) - merged with Use Case stage
+- Removed `onclick="navigateToStage(...)"` from stage links
+- Updated JavaScript to set proper hrefs dynamically
+- Added `escapeHtml()` helper to prevent XSS
+- Fixed `updateStageLinks()` to remove onclick handlers after setting URLs
+- Updated `stageOrder` array to 6 stages
 
-### 2. User-Friendly Error Messages ✅
-- [x] Pollo.ai errors with specific messages:
-  - 401: "Authentication failed. Please check your Pollo.ai API key."
-  - 403: "Access denied. Your API key may not have permission for this operation."
-  - 404: "The requested resource was not found."
-  - 429: "Rate limit exceeded. Please wait a moment and try again."
-  - 500+: "Pollo.ai is experiencing issues. Please try again in a few minutes."
-  - Timeout: "Request timed out. The server is taking too long to respond."
-  - ConnectionError: "Connection failed. Please check your internet connection."
-- [x] ffmpeg errors with specific messages:
-  - File not found: "Input file not found. Please check that all video clips exist."
-  - Invalid data: "Invalid video file. One or more clips may be corrupted."
-  - Codec issues: "Unsupported video codec. Please try regenerating the clips."
-  - Memory errors: "Out of memory. Try reducing video quality or closing other applications."
+### app/models.py
+- Updated `Product.get_current_stage_info()` to match new stage structure
+- Added `is_complete` field to returned dict
+- Fixed progress percentages to match 6-stage pipeline (14.3%, 28.6%, 42.9%, etc.)
 
-### 3. Partial Progress Recovery ✅
-- [x] PipelineRecoveryService for resuming stalled pipelines
-- [x] `regenerate_clip()` method for retrying individual clips
-- [x] `/api/use-cases/{id}/retry-failed-clips` endpoint for batch retry
-- [x] Pipeline state saved to database (`pipeline_state` column in UseCase model)
+## Stage Pipeline (6 Stages)
 
-**New API Endpoints:**
-- `GET /api/use-cases/{id}/pipeline-status` - Get pipeline progress
-- `POST /api/use-cases/{id}/pipeline-recover` - Resume stalled pipeline
-- `POST /api/use-cases/{id}/retry-failed-clips` - Retry all failed clips
+1. **Scrape** (0%) - Product URL scraping
+2. **Use Case** (14.3%) - Use case configuration  
+3. **Script** (28.6% → 42.9%) - Script generation and approval
+4. **Video Gen** (42.9% → 57.1%) - Video clip generation
+5. **Assembly** (71.4% → 85.7%) - Video assembly with voiceover
+6. **Output** (100%) - Final video ready
 
-**Files Modified:**
-- `app/routes.py` - Added pipeline recovery routes
-- `app/models.py` - Added `pipeline_state` column to Product model
+## Testing Checklist
 
-### 4. Testing ✅
-- [x] Smoke tests created with 17 test cases
-- [x] Tests cover basic routes, product CRUD, use cases, error handling, pipeline recovery
-- [x] All 17 tests passing
+- [x] Dashboard loads without JavaScript errors
+- [x] Shows "Continue where you left off" section with active projects
+- [x] Pipeline progress bar reflects actual progress
+- [x] Stage icons show correct colors (green=complete, blue=active, gray=pending)
+- [x] Clicking each stage navigates to correct URL
+- [x] Recent projects list displays with correct stage labels
+- [x] Stats cards show correct counts
+- [x] "Start New Project" form works correctly
 
-**Test Files:**
-- `tests/__init__.py`
-- `tests/test_smoke.py` - 17 test cases
+## Files Modified
 
----
-
-## Error Types Implemented
-
-| Error Type | Description | Retryable |
-|------------|-------------|-----------|
-| `ExternalAPIError` | Base class for API errors | Yes |
-| `TransientJobError` | Temporary failures | Yes |
-| `NonRetryableAPIError` | Fatal errors (auth, etc.) | No |
-| `FFmpegError` | ffmpeg-specific errors | No |
-
----
-
-## Files Created/Modified
-
-### Modified:
-1. `app/services/pollo_ai.py` - Retry decorators, user-friendly errors
-2. `app/services/video_clip_manager.py` - Enhanced error handling, DB rollback
-3. `app/services/video_assembly.py` - FFmpegError class
-4. `app/routes.py` - Pipeline recovery routes, DB rollback
-5. `app/models.py` - Added `pipeline_state` to Product
-
-### Created:
-1. `tests/__init__.py`
-2. `tests/test_smoke.py` - 17 test cases
-
----
-
-## Progress Log
-- [2025-02-26 10:45] Started Phase 9 implementation
-- [2025-02-26 10:50] Enhanced PolloAI client with retry logic and user-friendly errors
-- [2025-02-26 10:55] Enhanced VideoClipManager with DB rollback on failures
-- [2025-02-26 11:00] Added FFmpegError class for graceful ffmpeg error handling
-- [2025-02-26 11:05] Added pipeline recovery routes
-- [2025-02-26 11:10] Created smoke tests (17 test cases)
-- [2025-02-26 11:15] All tests passing
-- [2025-02-26 11:20] Fixed Product model pipeline_state column
-
----
-
-## How to Run Tests
-
-```bash
-# Run all smoke tests
-cd /home/baill/.openclaw/workspace/product-video-generator
-source venv/bin/activate
-python -m pytest tests/test_smoke.py -v
-```
-
----
-
-## API Recovery Usage
-
-```bash
-# Check pipeline status
-curl http://localhost:5000/api/use-cases/1/pipeline-status
-
-# Recover stalled pipeline
-curl -X POST http://localhost:5000/api/use-cases/1/pipeline-recover
-
-# Retry failed clips
-curl -X POST http://localhost:5000/api/use-cases/1/retry-failed-clips
-```
+1. `/app/routes.py` - Fixed `/api/dashboard/status` endpoint
+2. `/templates/index.html` - Fixed UI and JavaScript navigation
+3. `/app/models.py` - Fixed `get_current_stage_info()` method

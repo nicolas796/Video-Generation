@@ -41,14 +41,14 @@ def health_check():
 
 def is_safe_path(basedir, path):
     """Check if a path is safe (prevents path traversal attacks).
-    
+
     Returns True if the resolved path is within basedir.
     """
     try:
         # Resolve to absolute paths
         base_path = os.path.abspath(basedir)
         target_path = os.path.abspath(os.path.join(basedir, path))
-        
+
         # Check if target_path starts with base_path
         return target_path.startswith(base_path)
     except (ValueError, OSError):
@@ -57,13 +57,13 @@ def is_safe_path(basedir, path):
 
 def safe_join(basedir, *paths):
     """Safely join paths and check for path traversal.
-    
+
     Returns the joined path if safe, or None if path traversal detected.
     """
     try:
         base_path = os.path.abspath(basedir)
         target_path = os.path.abspath(os.path.join(base_path, *paths))
-        
+
         if not target_path.startswith(base_path):
             return None
         return target_path
@@ -86,14 +86,14 @@ def _extract_pollo_video_url(payload: dict) -> Optional[str]:
     """Best-effort extraction of the video URL from a Pollo webhook payload."""
     if not isinstance(payload, dict):
         return None
-    
+
     # Check for generations array (actual Pollo webhook format)
     generations = payload.get('generations')
     if isinstance(generations, list) and len(generations) > 0:
         url = generations[0].get('url')
         if url:
             return url
-    
+
     candidate_paths = [
         'videoUrl',
         'video_url',
@@ -131,7 +131,7 @@ def _extract_pollo_status(payload: dict) -> str:
         # If URL is empty and no status, likely failed
         if not gen.get('url'):
             return 'failed'
-    
+
     candidates = [
         payload.get('status'),
         payload.get('taskStatus'),
@@ -148,20 +148,20 @@ def _extract_pollo_status(payload: dict) -> str:
 
 def _verify_pollo_signature(secret: str, provided_signature: Optional[str], raw_body: bytes, webhook_id: Optional[str] = None, webhook_timestamp: Optional[str] = None) -> bool:
     """Validate HMAC-SHA256 signature for webhook payloads per Pollo.ai spec.
-    
+
     The signature is calculated as HMAC-SHA256 of: webhook_id.webhook_timestamp.body
     """
     if not secret or not provided_signature:
         return False
-    
+
     # Build the signed content: webhook_id.webhook_timestamp.body
     signed_content = ""
     if webhook_id and webhook_timestamp:
         signed_content = f"{webhook_id}.{webhook_timestamp}."
-    
+
     if raw_body:
         signed_content = signed_content + raw_body.decode('utf-8')
-    
+
     digest = hmac.new(secret.encode('utf-8'), signed_content.encode('utf-8'), hashlib.sha256).hexdigest()
     provided = provided_signature.split('=', 1)[-1].strip()
     return hmac.compare_digest(digest, provided)
@@ -169,7 +169,7 @@ def _verify_pollo_signature(secret: str, provided_signature: Optional[str], raw_
 
 def _download_clip_assets(clip: VideoClip, video_url: str) -> Dict[str, Optional[str]]:
     """Download a Pollo-generated clip and create a thumbnail.
-    
+
     Returns a dictionary with relative video/thumbnail paths (relative to UPLOAD_FOLDER).
     Raises any download or file errors to the caller.
     """
@@ -242,81 +242,163 @@ def get_dashboard_status():
     # Build product progress data
     product_progress = []
     active_projects = []
-    
+
+    # Stage order for progress calculation: scrape -> spec -> usecase -> script -> video_gen -> assembly -> output
+    # Progress percentages: 0, 14.3, 28.6, 42.9, 57.1, 71.4, 85.7, 100
+    def get_stage_info(product, use_cases):
+        """Determine current stage info for a product."""
+        if not use_cases:
+            return {
+                'current_stage': 'usecase',
+                'stage_label': 'Scraped - Needs Use Case',
+                'progress_pct': 14.3,
+                'next_url': f"/use-case/{product.id}",
+                'use_case_id': None,
+                'use_case_name': None,
+                'is_complete': False
+            }
+        
+        use_case = use_cases[0]
+        pipeline = PipelineProgressTracker.summarize(use_case)
+        
+        # Check if project is complete (has final video)
+        is_complete = pipeline['has_final_video']
+        
+        # Check script status
+        script = Script.query.filter_by(use_case_id=use_case.id).first()
+        
+        if not script:
+            return {
+                'current_stage': 'script',
+                'stage_label': 'Needs Script',
+                'progress_pct': 28.6,
+                'next_url': f"/script/{use_case.id}",
+                'use_case_id': use_case.id,
+                'use_case_name': use_case.name,
+                'is_complete': False
+            }
+        
+        if script.status != 'approved':
+            return {
+                'current_stage': 'script',
+                'stage_label': 'Script Pending Approval',
+                'progress_pct': 42.9,
+                'next_url': f"/script/{use_case.id}",
+                'use_case_id': use_case.id,
+                'use_case_name': use_case.name,
+                'is_complete': False
+            }
+        
+        # Check video clips status
+        clips = VideoClip.query.filter_by(use_case_id=use_case.id).all()
+        complete_clips = [c for c in clips if c.status == 'complete']
+        error_clips = [c for c in clips if c.status == 'error']
+        pending_clips = [c for c in clips if c.status in ('pending', 'generating')]
+        
+        target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
+        
+        # If not all clips are complete, we're in video_gen stage
+        if len(complete_clips) < target_clips:
+            if error_clips:
+                label = f'Video Gen - {len(error_clips)} Error(s)'
+            elif pending_clips:
+                label = f'Video Gen - {len(complete_clips)}/{target_clips} Complete'
+            else:
+                label = 'Video Gen - Starting'
+            
+            clip_progress = (len(complete_clips) / max(target_clips, 1)) * 14.3
+            
+            return {
+                'current_stage': 'video_gen',
+                'stage_label': label,
+                'progress_pct': 42.9 + clip_progress,
+                'next_url': f"/video-gen/{use_case.id}",
+                'use_case_id': use_case.id,
+                'use_case_name': use_case.name,
+                'is_complete': False
+            }
+        
+        # All clips complete - check assembly status
+        final_video = FinalVideo.query.filter_by(use_case_id=use_case.id).order_by(FinalVideo.created_at.desc()).first()
+        
+        if not final_video:
+            return {
+                'current_stage': 'assembly',
+                'stage_label': 'Ready for Assembly',
+                'progress_pct': 71.4,
+                'next_url': f"/assembly/{use_case.id}",
+                'use_case_id': use_case.id,
+                'use_case_name': use_case.name,
+                'is_complete': False
+            }
+        
+        if final_video.status == 'complete':
+            return {
+                'current_stage': 'output',
+                'stage_label': 'Final Video Ready',
+                'progress_pct': 100.0,
+                'next_url': f"/output/{use_case.id}",
+                'use_case_id': use_case.id,
+                'use_case_name': use_case.name,
+                'is_complete': True
+            }
+        elif final_video.status == 'error':
+            return {
+                'current_stage': 'assembly',
+                'stage_label': 'Assembly Failed - Retry',
+                'progress_pct': 71.4,
+                'next_url': f"/assembly/{use_case.id}",
+                'use_case_id': use_case.id,
+                'use_case_name': use_case.name,
+                'is_complete': False
+            }
+        else:
+            return {
+                'current_stage': 'assembly',
+                'stage_label': 'Assembling Video...',
+                'progress_pct': 85.7,
+                'next_url': f"/assembly/{use_case.id}",
+                'use_case_id': use_case.id,
+                'use_case_name': use_case.name,
+                'is_complete': False
+            }
+
     for product in products:
         product_data = product.to_dict()
         use_cases = UseCase.query.filter_by(product_id=product.id).order_by(UseCase.created_at.desc()).all()
         
-        # Determine product stage based on use cases
-        if not use_cases:
-            current_stage = 'spec'
-            stage_label = 'Scraped - Needs Use Case'
-            progress_pct = 16.7  # 1/6 stages
-            next_url = f"/use-case/{product.id}"
-            use_case_id = None
-            use_case_name = None
+        # Get stage info using the product's own method if available, otherwise calculate
+        if hasattr(product, 'get_current_stage_info') and callable(getattr(product, 'get_current_stage_info')):
+            try:
+                stage_info = product.get_current_stage_info()
+            except Exception:
+                stage_info = get_stage_info(product, use_cases)
         else:
-            # Get the most active use case
-            use_case = use_cases[0]
-            use_case_id = use_case.id
-            use_case_name = use_case.name
-            pipeline = PipelineProgressTracker.summarize(use_case)
-            
-            # Determine current stage from pipeline
-            stages_order = ['script', 'clips', 'analysis', 'assembly', 'final_output']
-            current_pipeline_stage = None
-            
-            for stage in stages_order:
-                stage_data = pipeline['stages'].get(stage, {})
-                if stage_data.get('status') in ['pending', 'running', 'awaiting_approval', 'error']:
-                    current_pipeline_stage = stage
-                    break
-            
-            if not current_pipeline_stage:
-                current_pipeline_stage = 'final_output'
-            
-            # Map pipeline stages to UI stages with correct URLs
-            # Stages: scrape(0) -> spec(16.7) -> usecase(33.3) -> script(50) -> video_gen(66.7) -> assembly(83.3) -> output(100)
-            stage_mapping = {
-                'script': ('script', 'Script Generation', 50.0, f"/script/{use_case.id}"),
-                'clips': ('video_gen', 'Video Generation', 66.7, f"/video-gen/{use_case.id}"),
-                'analysis': ('video_gen', 'Clip Analysis', 66.7, f"/video-gen/{use_case.id}"),
-                'assembly': ('assembly', 'Video Assembly', 83.3, f"/assembly/{use_case.id}"),
-                'final_output': ('output', 'Final Output', 100.0, f"/output/{use_case.id}")
-            }
-            
-            stage_info = stage_mapping.get(current_pipeline_stage, ('usecase', 'Use Case Config', 33.3, f"/use-case/{product.id}"))
-            current_stage = stage_info[0]
-            stage_label = stage_info[1]
-            progress_pct = stage_info[2]
-            next_url = stage_info[3]
-            
-            # Check if this is an active/incomplete project
-            script = Script.query.filter_by(use_case_id=use_case.id).first()
-            is_complete = pipeline['has_final_video']
-            
-            if not is_complete:
-                active_projects.append({
-                    'product_id': product.id,
-                    'product_name': product.name,
-                    'use_case_id': use_case.id,
-                    'use_case_name': use_case.name,
-                    'current_stage': current_stage,
-                    'stage_label': stage_label,
-                    'progress_pct': progress_pct,
-                    'next_url': next_url,
-                    'updated_at': product.updated_at.isoformat() if product.updated_at else None
-                })
+            stage_info = get_stage_info(product, use_cases)
+        
+        # Add to active projects if not complete
+        if not stage_info['is_complete']:
+            active_projects.append({
+                'product_id': product.id,
+                'product_name': product.name,
+                'use_case_id': stage_info['use_case_id'],
+                'use_case_name': stage_info['use_case_name'],
+                'current_stage': stage_info['current_stage'],
+                'stage_label': stage_info['stage_label'],
+                'progress_pct': stage_info['progress_pct'],
+                'next_url': stage_info['next_url'],
+                'updated_at': product.updated_at.isoformat() if product.updated_at else None
+            })
         
         product_progress.append({
             'product': product_data,
-            'current_stage': current_stage,
-            'stage_label': stage_label,
-            'progress_pct': progress_pct,
-            'next_url': next_url,
+            'current_stage': stage_info['current_stage'],
+            'stage_label': stage_info['stage_label'],
+            'progress_pct': stage_info['progress_pct'],
+            'next_url': stage_info['next_url'],
             'use_case_count': len(use_cases),
-            'use_case_id': use_case_id,
-            'use_case_name': use_case_name
+            'use_case_id': stage_info['use_case_id'],
+            'use_case_name': stage_info['use_case_name']
         })
     
     # Calculate stats
@@ -366,7 +448,7 @@ def spec_sheet_page(product_id):
 def products_list_page():
     """Products list UI page."""
     products = Product.query.order_by(Product.created_at.desc()).all()
-    
+
     # Enrich with use case count
     products_data = []
     for product in products:
@@ -375,7 +457,7 @@ def products_list_page():
             'product': product,
             'use_case_count': use_case_count
         })
-    
+
     return render_template('products_list.html', products_data=products_data)
 
 
@@ -429,7 +511,7 @@ def update_product(product_id):
     """Update a product."""
     product = Product.query.get_or_404(product_id)
     data = request.get_json()
-    
+
     product.name = data.get('name', product.name)
     product.description = data.get('description', product.description)
     product.brand = data.get('brand', product.brand)
@@ -438,7 +520,7 @@ def update_product(product_id):
     product.images = data.get('images', product.images)
     product.specifications = data.get('specifications', product.specifications)
     product.reviews = data.get('reviews', product.reviews)
-    
+
     db.session.commit()
     return jsonify(product.to_dict())
 
@@ -467,24 +549,24 @@ def scrape_url():
     data = request.get_json()
     url = data.get('url')
     save = data.get('save', False)
-    
+
     if not url:
         return jsonify({'error': 'URL is required'}), 400
-    
+
     # Validate URL format
     if not url.startswith(('http://', 'https://')):
         return jsonify({'error': 'Invalid URL format'}), 400
-    
+
     # Scrape the URL
     scraped_data = scrape_product(url)
-    
+
     if 'error' in scraped_data:
         return jsonify({
             'success': False,
             'error': scraped_data['error'],
             'url': url
         }), 422
-    
+
     # Save to database if requested
     if save:
         # Check if product already exists
@@ -520,10 +602,10 @@ def scrape_url():
             )
             db.session.add(product)
             db.session.commit()
-        
+
         scraped_data['product_id'] = product.id
         scraped_data['saved'] = True
-        
+
         # Auto-download product images
         if product.images:
             try:
@@ -532,13 +614,13 @@ def scrape_url():
                     str(product.id)
                 )
                 os.makedirs(product_folder, exist_ok=True)
-                
+
                 downloaded_count = 0
                 for i, img_url in enumerate(product.images[:10]):  # Max 10 images
                     try:
                         response = requests.get(img_url, timeout=30)
                         response.raise_for_status()
-                        
+
                         # Determine extension
                         content_type = response.headers.get('content-type', '')
                         if 'jpeg' in content_type or 'jpg' in content_type:
@@ -549,23 +631,23 @@ def scrape_url():
                             ext = 'webp'
                         else:
                             ext = 'jpg'
-                        
+
                         filename = f"image_{i+1:02d}.{ext}"
                         filepath = os.path.join(product_folder, filename)
-                        
+
                         with open(filepath, 'wb') as f:
                             for chunk in response.iter_content(chunk_size=8192):
                                 f.write(chunk)
                         downloaded_count += 1
                     except Exception as e:
                         current_app.logger.warning(f"Failed to download image {img_url}: {e}")
-                
+
                 scraped_data['images_downloaded'] = downloaded_count
             except Exception as e:
                 current_app.logger.error(f"Error auto-downloading images: {e}")
     else:
         scraped_data['saved'] = False
-    
+
     return jsonify({
         'success': True,
         'data': scraped_data
@@ -578,21 +660,21 @@ def scrape_preview():
     """Scrape a URL for preview (does not save to database)."""
     data = request.get_json()
     url = data.get('url')
-    
+
     if not url:
         return jsonify({'error': 'URL is required'}), 400
-    
+
     if not url.startswith(('http://', 'https://')):
         return jsonify({'error': 'Invalid URL format'}), 400
-    
+
     scraped_data = scrape_product(url)
-    
+
     if 'error' in scraped_data:
         return jsonify({
             'success': False,
             'error': scraped_data['error']
         }), 422
-    
+
     return jsonify({
         'success': True,
         'data': scraped_data
@@ -608,25 +690,25 @@ def scrape_preview():
 def download_product_images(product_id):
     """Download product images to local storage."""
     product = Product.query.get_or_404(product_id)
-    
+
     if not product.images:
         return jsonify({'error': 'No images to download'}), 400
-    
+
     downloaded = []
     failed = []
-    
+
     # Create product directory
     product_folder = os.path.join(
         current_app.config['PRODUCT_UPLOAD_FOLDER'],
         str(product_id)
     )
     os.makedirs(product_folder, exist_ok=True)
-    
+
     for i, img_url in enumerate(product.images):
         try:
             response = requests.get(img_url, timeout=30, stream=True)
             response.raise_for_status()
-            
+
             # Determine file extension
             content_type = response.headers.get('content-type', '')
             if 'jpeg' in content_type or 'jpg' in content_type:
@@ -642,26 +724,26 @@ def download_product_images(product_id):
                 ext = os.path.splitext(img_url.split('?')[0])[1].lstrip('.')
                 if ext not in ['jpg', 'jpeg', 'png', 'webp', 'gif']:
                     ext = 'jpg'
-            
+
             filename = f"image_{i+1:02d}.{ext}"
             filepath = os.path.join(product_folder, filename)
-            
+
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
-            
+
             downloaded.append({
                 'original_url': img_url,
                 'local_path': f"products/{product_id}/{filename}",
                 'filename': filename
             })
-            
+
         except Exception as e:
             failed.append({
                 'url': img_url,
                 'error': str(e)
             })
-    
+
     return jsonify({
         'success': True,
         'downloaded': downloaded,
@@ -675,17 +757,17 @@ def download_product_images(product_id):
 def get_product_assets(product_id):
     """Get list of locally stored assets for a product."""
     product = Product.query.get_or_404(product_id)
-    
+
     product_folder = os.path.join(
         current_app.config['PRODUCT_UPLOAD_FOLDER'],
         str(product_id)
     )
-    
+
     assets = {
         'images': [],
         'other': []
     }
-    
+
     if os.path.exists(product_folder):
         for filename in os.listdir(product_folder):
             filepath = os.path.join(product_folder, filename)
@@ -697,12 +779,12 @@ def get_product_assets(product_id):
                     'size': os.path.getsize(filepath),
                     'url': f"/uploads/products/{product_id}/{filename}"
                 }
-                
+
                 if ext in ['.jpg', '.jpeg', '.png', '.webp', '.gif']:
                     assets['images'].append(asset_info)
                 else:
                     assets['other'].append(asset_info)
-    
+
     return jsonify({
         'product_id': product_id,
         'assets': assets
@@ -714,23 +796,23 @@ def get_product_assets(product_id):
 def serve_upload(filename):
     """Serve uploaded files with path traversal protection."""
     upload_folder = current_app.config['UPLOAD_FOLDER']
-    
+
     # Security: Validate filename to prevent path traversal
     # 1. Ensure no '..' in path components
     if '..' in filename or filename.startswith('/'):
         current_app.logger.warning(f'Invalid path detected: {filename}')
         abort(403, 'Access denied')
-    
+
     # 2. Split path and sanitize each component
     path_parts = filename.split('/')
     safe_parts = [secure_filename(part) for part in path_parts]
     safe_filename = '/'.join(safe_parts)
-    
+
     # 3. Check if the safe path is still within upload folder
     if not is_safe_path(upload_folder, safe_filename):
         current_app.logger.warning(f'Path traversal attempt detected: {filename}')
         abort(403, 'Access denied')
-    
+
     return send_from_directory(upload_folder, safe_filename)
 
 
@@ -743,13 +825,13 @@ def serve_upload(filename):
 def get_spec_sheet(product_id):
     """Generate a comprehensive spec sheet for a product."""
     product = Product.query.get_or_404(product_id)
-    
+
     # Get local assets
     product_folder = os.path.join(
         current_app.config['PRODUCT_UPLOAD_FOLDER'],
         str(product_id)
     )
-    
+
     local_images = []
     if os.path.exists(product_folder):
         for filename in sorted(os.listdir(product_folder)):
@@ -760,7 +842,7 @@ def get_spec_sheet(product_id):
                     'url': f"/uploads/products/{product_id}/{filename}",
                     'path': f"products/{product_id}/{filename}"
                 })
-    
+
     # Build spec sheet
     spec_sheet = {
         'product_id': product.id,
@@ -788,7 +870,7 @@ def get_spec_sheet(product_id):
             'updated_at': product.updated_at.isoformat() if product.updated_at else None
         }
     }
-    
+
     return jsonify(spec_sheet)
 
 
@@ -842,7 +924,7 @@ def create_use_case(product_id):
     """Create a new use case for a product."""
     product = Product.query.get_or_404(product_id)
     data = request.get_json()
-    
+
     use_case = UseCase(
         product_id=product_id,
         name=data.get('name', 'New Use Case'),
@@ -856,10 +938,10 @@ def create_use_case(product_id):
         status='configured' if data.get('voice_id') else 'draft'
     )
     use_case.sync_num_clips()
-    
+
     db.session.add(use_case)
     db.session.commit()
-    
+
     return jsonify(use_case.to_dict()), 201
 
 
@@ -869,7 +951,7 @@ def update_use_case(use_case_id):
     """Update a use case."""
     use_case = UseCase.query.get_or_404(use_case_id)
     data = request.get_json()
-    
+
     use_case.name = data.get('name', use_case.name)
     use_case.format = data.get('format', use_case.format)
     use_case.style = data.get('style', use_case.style)
@@ -879,11 +961,11 @@ def update_use_case(use_case_id):
     use_case.voice_id = data.get('voice_id', use_case.voice_id)
     use_case.voice_settings = data.get('voice_settings', use_case.voice_settings)
     use_case.sync_num_clips()
-    
+
     # Update status if voice is selected
     if use_case.voice_id and use_case.status == 'draft':
         use_case.status = 'configured'
-    
+
     db.session.commit()
     return jsonify(use_case.to_dict())
 
@@ -903,7 +985,7 @@ def delete_use_case(use_case_id):
 def duplicate_use_case(use_case_id):
     """Duplicate an existing use case."""
     original = UseCase.query.get_or_404(use_case_id)
-    
+
     new_use_case = UseCase(
         product_id=original.product_id,
         name=f"{original.name} (Copy)",
@@ -918,10 +1000,10 @@ def duplicate_use_case(use_case_id):
         status='configured'
     )
     new_use_case.sync_num_clips()
-    
+
     db.session.add(new_use_case)
     db.session.commit()
-    
+
     return jsonify(new_use_case.to_dict()), 201
 
 
@@ -934,7 +1016,7 @@ def duplicate_use_case(use_case_id):
 def get_voices():
     """Get available ElevenLabs voices."""
     api_key = current_app.config.get('ELEVENLABS_API_KEY')
-    
+
     if not api_key:
         # Return default voice list if no API key
         return jsonify({
@@ -951,7 +1033,7 @@ def get_voices():
                 {'voice_id': 'N2lVS1w4EtoT3dr4eOWO', 'name': 'Callum', 'preview_url': None, 'category': 'premade'},
             ]
         })
-    
+
     try:
         headers = {'xi-api-key': api_key}
         response = requests.get('https://api.elevenlabs.io/v1/voices', headers=headers, timeout=30)
@@ -982,14 +1064,14 @@ def preview_voice():
     data = request.get_json()
     voice_id = data.get('voice_id')
     text = data.get('text', 'Welcome to our product showcase! This is how your voiceover will sound.')
-    
+
     if not voice_id:
         return jsonify({'error': 'Voice ID is required'}), 400
-    
+
     api_key = current_app.config.get('ELEVENLABS_API_KEY')
     if not api_key:
         return jsonify({'error': 'ElevenLabs API key not configured'}), 500
-    
+
     try:
         # Get voice settings
         voice_settings = data.get('voice_settings', {
@@ -998,18 +1080,18 @@ def preview_voice():
             'style': 0.0,
             'use_speaker_boost': True
         })
-        
+
         headers = {
             'xi-api-key': api_key,
             'Content-Type': 'application/json'
         }
-        
+
         payload = {
             'text': text,
             'model_id': 'eleven_multilingual_v2',
             'voice_settings': voice_settings
         }
-        
+
         response = requests.post(
             f'https://api.elevenlabs.io/v1/text-to-speech/{voice_id}',
             headers=headers,
@@ -1017,22 +1099,22 @@ def preview_voice():
             timeout=60
         )
         response.raise_for_status()
-        
+
         # Save audio to temp file
         preview_id = str(uuid.uuid4())
         preview_folder = os.path.join(current_app.config['UPLOAD_FOLDER'], 'previews')
         os.makedirs(preview_folder, exist_ok=True)
-        
+
         audio_path = os.path.join(preview_folder, f'{preview_id}.mp3')
         with open(audio_path, 'wb') as f:
             f.write(response.content)
-        
+
         return jsonify({
             'success': True,
             'preview_url': f'/uploads/previews/{preview_id}.mp3',
             'duration_estimate': len(text.split()) * 0.5  # Rough estimate
         })
-        
+
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 401:
             return jsonify({
@@ -1063,10 +1145,10 @@ def get_script(use_case_id):
     """Get the script for a use case."""
     use_case = UseCase.query.get_or_404(use_case_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     if not script:
         return jsonify({'error': 'No script found for this use case'}), 404
-    
+
     return jsonify(script.to_dict())
 
 
@@ -1076,15 +1158,15 @@ def generate_script_route(use_case_id):
     """Generate a new script for a use case."""
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
-    
+
     # Check for existing script
     existing_script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     # Get OpenAI API key
     api_key = current_app.config.get('OPENAI_API_KEY')
     if not api_key:
         return jsonify({'error': 'OPENAI_API_KEY not configured'}), 500
-    
+
     try:
         # Prepare product data
         product_data = {
@@ -1096,7 +1178,7 @@ def generate_script_route(use_case_id):
             'specifications': product.specifications,
             'reviews': product.reviews
         }
-        
+
         # Prepare use case config
         use_case_config = {
             'format': use_case.format,
@@ -1105,24 +1187,24 @@ def generate_script_route(use_case_id):
             'target_audience': use_case.target_audience,
             'duration_target': use_case.duration_target
         }
-        
+
         # Generate script
         current_app.logger.info(f"Generating script for use_case {use_case_id}")
         generator = ScriptGenerator(api_key=api_key)
         result = generator.generate_script(product_data, use_case_config)
-        
+
         if not result.get('success'):
             error_msg = result.get('error', 'Script generation failed')
             current_app.logger.error(f"Script generation failed: {error_msg}")
             return jsonify({'error': error_msg}), 500
-        
+
         # Validate content exists
         if not result.get('content'):
             current_app.logger.error("Script generation returned empty content (success=True but no content)")
             return jsonify({'error': 'Script generation returned empty content'}), 500
-        
+
         current_app.logger.info(f"Saving script for use_case {use_case_id}, content length: {len(result['content'])}")
-        
+
         # Save or update script
         if existing_script:
             existing_script.content = result['content']
@@ -1144,19 +1226,19 @@ def generate_script_route(use_case_id):
             db.session.add(script)
             db.session.commit()
             current_app.logger.info(f"Created new script with id: {script.id}")
-        
+
         # Update use case status
         if use_case.status == 'configured':
             use_case.status = 'generating'
             db.session.commit()
-        
+
         current_app.logger.info(f"Script saved successfully for use_case {use_case_id}")
         return jsonify({
             'success': True,
             'script': script.to_dict(),
             'word_count': result.get('word_count', 0)
         })
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Script generation exception: {type(e).__name__}: {e}")
@@ -1170,20 +1252,20 @@ def update_script(use_case_id):
     """Update an existing script (manual editing)."""
     use_case = UseCase.query.get_or_404(use_case_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     if not script:
         return jsonify({'error': 'No script found for this use case'}), 404
-    
+
     data = request.get_json()
     script.content = data.get('content', script.content)
-    
+
     # Recalculate estimated duration
     word_count = len(script.content.split())
     script.estimated_duration = int(word_count / 2.3)
     script.status = 'approved' if data.get('approve', False) else script.status
-    
+
     db.session.commit()
-    
+
     return jsonify({
         'success': True,
         'script': script.to_dict(),
@@ -1198,14 +1280,14 @@ def regenerate_script(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
     existing = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     api_key = current_app.config.get('OPENAI_API_KEY')
     if not api_key:
         return jsonify({'error': 'OPENAI_API_KEY not configured'}), 500
-    
+
     data = request.get_json() or {}
     refinement = data.get('refinement', '')
-    
+
     try:
         product_data = {
             'name': product.name,
@@ -1216,7 +1298,7 @@ def regenerate_script(use_case_id):
             'specifications': product.specifications,
             'reviews': product.reviews
         }
-        
+
         use_case_config = {
             'format': use_case.format,
             'style': use_case.style,
@@ -1224,9 +1306,9 @@ def regenerate_script(use_case_id):
             'target_audience': use_case.target_audience,
             'duration_target': use_case.duration_target
         }
-        
+
         generator = ScriptGenerator(api_key=api_key)
-        
+
         if refinement and existing:
             # Refine existing script
             result = generator.refine_script(
@@ -1243,10 +1325,10 @@ def regenerate_script(use_case_id):
                 use_case_config,
                 existing_script=existing_content
             )
-        
+
         if not result['success']:
             return jsonify({'error': result.get('error', 'Script generation failed')}), 500
-        
+
         # Save or update script
         if existing:
             existing.content = result['content']
@@ -1265,13 +1347,13 @@ def regenerate_script(use_case_id):
             )
             db.session.add(script)
             db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'script': script.to_dict(),
             'word_count': result.get('word_count', 0)
         })
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1281,13 +1363,13 @@ def regenerate_script(use_case_id):
 def approve_script(use_case_id):
     """Approve a script for video generation."""
     script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     if not script:
         return jsonify({'error': 'No script found'}), 404
-    
+
     script.status = 'approved'
     db.session.commit()
-    
+
     return jsonify({
         'success': True,
         'script': script.to_dict()
@@ -1299,13 +1381,13 @@ def approve_script(use_case_id):
 def delete_script(use_case_id):
     """Delete a script."""
     script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     if not script:
         return jsonify({'error': 'No script found'}), 404
-    
+
     db.session.delete(script)
     db.session.commit()
-    
+
     return jsonify({'message': 'Script deleted'})
 
 
@@ -1341,19 +1423,19 @@ def get_video_models():
 def get_video_clips(use_case_id):
     """Get all video clips for a use case."""
     use_case = UseCase.query.get_or_404(use_case_id)
-    
+
     try:
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         clips = manager.get_use_case_clips(use_case_id, refresh_status=True)
         stats = manager.get_generation_stats(use_case_id)
 
         if stats.get('is_complete') and use_case.status == 'generating':
             use_case.status = 'complete'
             db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'clips': clips,
@@ -1371,10 +1453,10 @@ def get_product_images(product_id):
     """Get all product images for selection."""
     product = Product.query.get_or_404(product_id)
     upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
-    
+
     product_folder = os.path.join(upload_folder, 'products', str(product_id))
     images = []
-    
+
     # Priority: Return remote/public URLs first (these work with Pollo.ai)
     if product.images:
         for i, img_url in enumerate(product.images[:10]):
@@ -1384,7 +1466,7 @@ def get_product_images(product_id):
                 'source': 'remote',
                 'pollo_compatible': True  # Public URLs work with Pollo.ai
             })
-    
+
     # Also include local images for preview/display purposes
     if os.path.exists(product_folder):
         for filename in sorted(os.listdir(product_folder)):
@@ -1398,7 +1480,7 @@ def get_product_images(product_id):
                         'source': 'local',
                         'pollo_compatible': False  # Local paths don't work with Pollo.ai
                     })
-    
+
     return jsonify({
         'success': True,
         'images': images,
@@ -1611,15 +1693,15 @@ Return ONLY the scene description (2-3 sentences), no other commentary."""
 
 def build_scene_prompt(product, use_case, script, custom_description, style, clip_count):
     """Build an optimized prompt for scene image generation."""
-    
+
     product_name = product.name or 'product'
     product_desc = product.description or ''
     use_case_style = use_case.style or 'realistic'
     video_format = use_case.format or '9:16'
-    
+
     # Get script content for context
     script_content = script.content if script else ''
-    
+
     # Determine clip types based on count
     clip_types = []
     if clip_count == 1:
@@ -1632,7 +1714,7 @@ def build_scene_prompt(product, use_case, script, custom_description, style, cli
         clip_types = ['hook', 'problem', 'solution', 'cta']
     else:
         clip_types = ['hook', 'problem', 'solution', 'benefits', 'cta'][:clip_count]
-    
+
     # Build clip type descriptions
     clip_descriptions = {
         'hook': f"Attention-grabbing opening scene featuring {product_name}",
@@ -1642,14 +1724,14 @@ def build_scene_prompt(product, use_case, script, custom_description, style, cli
         'cta': f"Strong closing scene with {product_name} front and center",
         'product_showcase': f"Stunning product showcase of {product_name}"
     }
-    
+
     # If user provided custom description, use it as primary
     if custom_description:
         scene_desc = custom_description
     else:
         # Auto-generate based on clip types
         scene_desc = "; ".join([clip_descriptions.get(ct, f"Scene featuring {product_name}") for ct in clip_types])
-    
+
     # Style descriptors
     style_prompts = {
         'realistic': 'photorealistic, professional photography, natural lighting, high detail',
@@ -1658,9 +1740,9 @@ def build_scene_prompt(product, use_case, script, custom_description, style, cli
         'studio': 'professional studio photography, clean background, perfect lighting, commercial quality',
         'animated': '3D rendered style, smooth surfaces, vibrant colors, modern aesthetic'
     }
-    
+
     style_desc = style_prompts.get(style, style_prompts['realistic'])
-    
+
     # Format guidance
     format_guidance = {
         '9:16': 'vertical composition, suitable for mobile/portrait format',
@@ -1668,37 +1750,37 @@ def build_scene_prompt(product, use_case, script, custom_description, style, cli
         '1:1': 'square composition, balanced framing',
         '4:5': 'portrait composition, Instagram-friendly'
     }
-    
+
     format_desc = format_guidance.get(video_format, 'professional composition')
-    
+
     # Build final prompt
-    prompt = f"""{scene_desc}. 
+    prompt = f"""{scene_desc}.
 
 Product context: {product_name} - {product_desc[:100]}
 
-Style: {style_desc}. {format_desc}. 
+Style: {style_desc}. {format_desc}.
 
 The image should be visually striking, professionally composed, and suitable as a starting frame for a video advertisement. No text, no watermarks, no logos."""
-    
+
     return prompt
 
 
 def _get_scene_context(scene_template, product, script, custom_description):
     """Get scene context description based on template selection.
-    
+
     Args:
         scene_template: Template key ('none', 'ai-suggested', 'kitchen', etc.)
         product: Product model
         script: Script model
         custom_description: Additional user description
-        
+
     Returns:
         Scene context string for prompt enhancement, or None if 'none' selected
     """
     if scene_template == 'none':
         # No scene context - just use custom description if provided
         return custom_description if custom_description else None
-    
+
     # Define scene templates
     scene_templates = {
         'ai-suggested': None,  # Will be generated dynamically
@@ -1711,43 +1793,43 @@ def _get_scene_context(scene_template, product, script, custom_description):
         'hands': 'in close-up of hands naturally holding and using the product, shallow depth of field, authentic moment',
         'studio': 'on clean gradient background with professional studio lighting and soft shadows, sharp focus'
     }
-    
+
     scene_context = scene_templates.get(scene_template)
-    
+
     # If AI suggested, generate context based on product
     if scene_template == 'ai-suggested':
         scene_context = _generate_ai_scene_suggestion(product, script)
-    
+
     # Add custom description if provided
     if custom_description and scene_context:
         scene_context += f". {custom_description}"
     elif custom_description:
         scene_context = custom_description
-    
+
     return scene_context
 
 
 def _generate_scene_for_clip(use_case, product, script, scene_template, custom_description, upload_folder):
     """Generate a scene image combining product with scene template context.
-    
+
     Uses DALL-E 3 to create a contextual scene image that places the product
     in the selected environment.
-    
+
     Args:
         use_case: UseCase model
-        product: Product model  
+        product: Product model
         script: Script model (optional)
         scene_template: Template key or 'ai-suggested'
         custom_description: Additional user description
         upload_folder: Upload folder path
-        
+
     Returns:
         Dict with success, local_url, and prompt
     """
     try:
         import openai
         import time
-        
+
         # Define scene templates
         scene_templates = {
             'kitchen': 'Product elegantly placed on marble kitchen counter, warm morning sunlight streaming through window, fresh ingredients and coffee cup nearby, inviting domestic atmosphere',
@@ -1759,45 +1841,45 @@ def _generate_scene_for_clip(use_case, product, script, scene_template, custom_d
             'hands': 'Close-up of hands naturally holding and using the product, shallow depth of field, lifestyle context, authentic moment',
             'studio': 'Product on clean gradient background, professional studio lighting with soft shadows, sharp focus, commercial product photography'
         }
-        
+
         # Get scene context
         scene_context = None
         if scene_template == 'ai-suggested':
             scene_context = _generate_ai_scene_suggestion(product, script)
         else:
             scene_context = scene_templates.get(scene_template, scene_templates['studio'])
-        
+
         # Add custom description
         if custom_description:
             scene_context += f". {custom_description}"
-        
+
         # Build the DALL-E prompt
         product_name = product.name or 'product'
         product_desc = product.description or ''
-        
+
         dalle_prompt = f"""{scene_context}
 
 The product "{product_name}" ({product_desc[:80]}) is featured naturally in this scene. Professional photography, photorealistic quality, cinematic composition. No text, no logos, no watermarks. Suitable as a starting frame for video advertisement."""
-        
+
         # Generate image
         api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return {'success': False, 'error': 'OpenAI API key not configured'}
-        
+
         http_client = None
         try:
             import httpx
             http_client = httpx.Client(timeout=60.0, follow_redirects=True)
         except Exception:
             pass
-        
+
         if http_client:
             client = openai.OpenAI(api_key=api_key, http_client=http_client)
         else:
             client = openai.OpenAI(api_key=api_key)
-        
+
         current_app.logger.info(f'Generating scene image with template: {scene_template}')
-        
+
         response = client.images.generate(
             model="dall-e-3",
             prompt=dalle_prompt,
@@ -1805,32 +1887,32 @@ The product "{product_name}" ({product_desc[:80]}) is featured naturally in this
             quality="standard",
             n=1
         )
-        
+
         image_url = response.data[0].url
-        
+
         # Download and save locally
         import requests
         scene_folder = os.path.join(upload_folder, 'scenes', str(use_case.id))
         os.makedirs(scene_folder, exist_ok=True)
-        
+
         timestamp = int(time.time())
         filename = f"scene_clip_{timestamp}.png"
         filepath = os.path.join(scene_folder, filename)
-        
+
         img_response = requests.get(image_url, timeout=30)
         img_response.raise_for_status()
-        
+
         with open(filepath, 'wb') as f:
             f.write(img_response.content)
-        
+
         relative_path = f"/uploads/scenes/{use_case.id}/{filename}"
-        
+
         return {
             'success': True,
             'local_url': relative_path,
             'prompt': dalle_prompt
         }
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Scene generation for clip failed: {e}\n{traceback.format_exc()}")
@@ -1839,7 +1921,7 @@ The product "{product_name}" ({product_desc[:80]}) is featured naturally in this
 
 def build_scene_prompt_with_context(product, use_case, script, custom_description, scene_context, clip_count):
     """Build a scene prompt using pre-defined or AI-suggested scene context.
-    
+
     Args:
         product: Product model
         use_case: UseCase model
@@ -1848,21 +1930,21 @@ def build_scene_prompt_with_context(product, use_case, script, custom_descriptio
         scene_context: The scene template description or AI suggestion
         clip_count: Number of clips being generated
     """
-    
+
     product_name = product.name or 'product'
     product_desc = product.description or ''
     video_format = use_case.format or '9:16'
-    
+
     # Get script content for additional context
     script_content = script.content if script else ''
-    
+
     # Start with scene context as the foundation
     base_scene = scene_context or f"Professional product showcase of {product_name}"
-    
+
     # Add custom description if provided
     if custom_description:
         base_scene += f". {custom_description}"
-    
+
     # Determine clip type for additional context
     clip_types = []
     if clip_count == 1:
@@ -1875,7 +1957,7 @@ def build_scene_prompt_with_context(product, use_case, script, custom_descriptio
         clip_types = ['hook', 'problem', 'solution', 'cta']
     else:
         clip_types = ['hook', 'problem', 'solution', 'benefits', 'cta'][:clip_count]
-    
+
     # For single clip, focus on the scene context entirely
     # For multiple clips, add narrative context
     narrative_context = ""
@@ -1884,7 +1966,7 @@ def build_scene_prompt_with_context(product, use_case, script, custom_descriptio
         sentences = [s.strip() for s in script_content.replace('!', '.').replace('?', '.').split('.') if s.strip()]
         if sentences:
             narrative_context = f" Scene narrative: {sentences[0][:100]}"
-    
+
     # Format guidance based on use case
     format_guidance = {
         '9:16': 'vertical composition, mobile-friendly portrait format, subject centered',
@@ -1893,10 +1975,10 @@ def build_scene_prompt_with_context(product, use_case, script, custom_descriptio
         '4:5': 'portrait composition, Instagram-friendly format'
     }
     format_desc = format_guidance.get(video_format, 'professional composition')
-    
+
     # Lighting and quality descriptors
     lighting_desc = "professional studio lighting with soft shadows, high resolution, sharp focus"
-    
+
     # Build final prompt
     prompt = f"""{base_scene}.{narrative_context}
 
@@ -1905,7 +1987,7 @@ The product "{product_name}" is featured prominently in this {clip_types[0].repl
 Technical specifications: {format_desc}, {lighting_desc}, photorealistic quality, suitable as starting frame for video advertisement.
 
 Important: No text overlays, no watermarks, no logos visible. Clean professional composition."""
-    
+
     return prompt
 
 
@@ -1916,48 +1998,48 @@ def generate_video_clips(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     if not script:
         return jsonify({'error': 'No script found. Generate a script first.'}), 400
-    
+
     if script.status != 'approved':
         return jsonify({'error': 'Script must be approved before generating videos.'}), 400
-    
+
     try:
         data = request.get_json() or {}
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         # Get existing clips count
         existing_clips = VideoClip.query.filter_by(use_case_id=use_case_id).count()
         target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
-        
+
         # How many clips to generate (default to remaining, or 1 if not specified)
         remaining_clips = target_clips - existing_clips
         requested_count = data.get('count', remaining_clips if remaining_clips > 0 else 1)
-        
+
         # Validate count
         try:
             requested_count = int(requested_count)
         except (TypeError, ValueError):
             requested_count = 1
-        
+
         # Clamp to valid range
         count = max(1, min(requested_count, remaining_clips))
-        
+
         if remaining_clips <= 0:
             return jsonify({'error': f'All {target_clips} clips already generated. Delete one to regenerate.'}), 400
-        
+
         # Get scene template and other parameters
         scene_template = data.get('scene_template', 'none')
         custom_description = data.get('custom_description', '')
         selected_image_url = data.get('selected_image_url')
-        
+
         # Get scene context for prompt enhancement
         scene_context = _get_scene_context(scene_template, product, script, custom_description)
         current_app.logger.info(f'Using scene template: {scene_template}', scene_context=scene_context[:100] if scene_context else 'none')
-        
+
         # Use GPT-4o Vision to generate context-aware prompts with scene context
         clips_config = manager.generate_clip_prompts(
             use_case=use_case,
@@ -1966,41 +2048,41 @@ def generate_video_clips(use_case_id):
             num_clips=target_clips,
             scene_context=scene_context
         )
-        
+
         generated_clips = []
         errors = []
         queued_clips = []
-        
+
         # Pollo.ai has rate limits - generate clips sequentially with delays
         DELAY_BETWEEN_CLIPS = 3  # seconds between starting each clip
         MAX_RETRIES = 2
-        
+
         # Generate requested number of clips with rate limiting
         for i in range(count):
             clip_index = existing_clips + i
-            
+
             if clip_index >= len(clips_config):
                 break
-            
+
             clip_config = clips_config[clip_index]
             prompt = clip_config['prompt']
             clip_type = clip_config['clip_type']
-            
+
             # Get the image URL for this clip - use selected product image directly
             image_url = None
-            
+
             # Use selected product image URL
             if selected_image_url:
                 if selected_image_url.startswith(('http://', 'https://')):
                     image_url = selected_image_url
                     current_app.logger.info(f'Using selected product image for clip {clip_index}')
-            
+
             # Fall back to product images if nothing selected
             if not image_url and product.images:
                 if isinstance(product.images, list) and len(product.images) > 0:
                     image_index = clip_index % len(product.images)
                     image_url = product.images[image_index]
-            
+
             # Create clip with AI-generated prompt
             clip = manager.create_clip(
                 use_case_id=use_case_id,
@@ -2008,15 +2090,15 @@ def generate_video_clips(use_case_id):
                 prompt=prompt,
                 length=5
             )
-            
+
             # Start generation with retry logic for rate limits
             result = None
             retry_count = 0
             success = False
-            
+
             while retry_count <= MAX_RETRIES and not success:
                 result = manager.start_generation(clip.id, image_url=image_url)
-                
+
                 if result.get('success'):
                     success = True
                 elif result.get('error_type') == 'rate_limit' or '429' in str(result.get('error', '')):
@@ -2030,7 +2112,7 @@ def generate_video_clips(use_case_id):
                 else:
                     # Other error - don't retry
                     break
-            
+
             if success:
                 generated_clips.append({
                     'clip': clip.to_dict(),
@@ -2058,19 +2140,19 @@ def generate_video_clips(use_case_id):
                         'error': result.get('error', 'Failed to start generation') if result else 'Unknown error',
                         'prompt_sent': prompt
                     })
-            
+
             # Add delay between clips (except for the last one)
             if i < count - 1:
                 import time
                 current_app.logger.info(f'Waiting {DELAY_BETWEEN_CLIPS}s before starting next clip ({i+1}/{count})')
                 time.sleep(DELAY_BETWEEN_CLIPS)
-        
+
         if generated_clips or queued_clips:
             use_case.status = 'generating'
             db.session.commit()
-            
+
             total_processing = len(generated_clips) + len(queued_clips)
-            
+
             return jsonify({
                 'success': True,
                 'clips': generated_clips,
@@ -2087,7 +2169,7 @@ def generate_video_clips(use_case_id):
                 'error': 'Failed to start any clip generation',
                 'errors': errors
             }), 500
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Error generating clips: {e}\n{traceback.format_exc()}")
@@ -2099,69 +2181,69 @@ def generate_video_clips(use_case_id):
 def upload_video_clip(use_case_id):
     """Upload a user-provided video clip with path traversal protection."""
     use_case = UseCase.query.get_or_404(use_case_id)
-    
+
     if 'video' not in request.files:
         return jsonify({'error': 'No video file provided'}), 400
-    
+
     file = request.files['video']
     if file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
-    
+
     clip_type = request.form.get('clip_type', 'custom')
-    
+
     # Debug logging for Render disk issues
     current_app.logger.info(f"Upload attempt for use_case {use_case_id}")
     current_app.logger.info(f"CLIP_UPLOAD_FOLDER: {current_app.config.get('CLIP_UPLOAD_FOLDER')}")
     current_app.logger.info(f"UPLOAD_FOLDER: {current_app.config.get('UPLOAD_FOLDER')}")
     current_app.logger.info(f"File name: {file.filename}")
     # Don't read file content into memory - stream it instead
-    
+
     try:
         # Get existing clips count for sequence order
         existing_clips = VideoClip.query.filter_by(use_case_id=use_case_id).count()
-        
+
         # Create clip folder with safe path
         clip_upload_folder = current_app.config['CLIP_UPLOAD_FOLDER']
         clip_folder = safe_join(clip_upload_folder, str(use_case_id))
-        
+
         current_app.logger.info(f"clip_folder resolved to: {clip_folder}")
-        
+
         if not clip_folder:
             current_app.logger.error(f"safe_join returned None for base={clip_upload_folder}, use_case={use_case_id}")
             return jsonify({'error': 'Invalid upload path configuration'}), 500
-            
+
         # Ensure parent directory exists
         os.makedirs(clip_upload_folder, exist_ok=True)
         os.makedirs(clip_folder, exist_ok=True)
-        
+
         # Check if directory is writable
         if not os.access(clip_folder, os.W_OK):
             current_app.logger.error(f"Directory not writable: {clip_folder}")
             return jsonify({'error': 'Upload directory is not writable'}), 500
-        
+
         # Save the uploaded file with secure filename
         original_filename = secure_filename(file.filename)
         filename = f"uploaded_{existing_clips + 1:02d}_{original_filename}"
         filepath = os.path.join(clip_folder, filename)
-        
+
         # Additional safety check
         if not is_safe_path(current_app.config['CLIP_UPLOAD_FOLDER'], filepath):
             return jsonify({'error': 'Invalid file path'}), 403
-            
+
         file.save(filepath)
-        
+
         # Get video duration using ffprobe or default to 5 seconds
         try:
             import subprocess
             result = subprocess.run(
-                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', 
+                ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                  '-of', 'default=noprint_wrappers=1:nokey=1', filepath],
                 capture_output=True, text=True
             )
             duration = int(float(result.stdout.strip())) if result.returncode == 0 else 5
         except:
             duration = 5
-        
+
         # Create clip record
         clip = VideoClip(
             use_case_id=use_case_id,
@@ -2175,7 +2257,7 @@ def upload_video_clip(use_case_id):
         )
         db.session.add(clip)
         db.session.commit()
-        
+
         # Generate thumbnail
         try:
             manager = VideoClipManager(
@@ -2188,13 +2270,13 @@ def upload_video_clip(use_case_id):
                 db.session.commit()
         except Exception as e:
             current_app.logger.warning(f"Failed to generate thumbnail: {e}")
-        
+
         return jsonify({
             'success': True,
             'clip': clip.to_dict(),
             'message': 'Video uploaded successfully'
         })
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Error uploading video: {e}\n{traceback.format_exc()}")
@@ -2206,15 +2288,15 @@ def upload_video_clip(use_case_id):
 def check_clip_status(clip_id):
     """Check the status of a video clip generation."""
     clip = VideoClip.query.get_or_404(clip_id)
-    
+
     try:
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         result = manager.check_clip_status(clip_id)
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2225,19 +2307,19 @@ def regenerate_video_clip(clip_id):
     """Regenerate a video clip."""
     clip = VideoClip.query.get_or_404(clip_id)
     data = request.get_json() or {}
-    
+
     try:
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         result = manager.regenerate_clip(
             clip_id=clip_id,
             new_prompt=data.get('prompt')
         )
-        
+
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2248,19 +2330,19 @@ def test_generate_single_clip():
     """Generate a single test clip with AI-powered prompt and image-to-video support."""
     data = request.get_json() or {}
     use_case_id = data.get('use_case_id')
-    
+
     if not use_case_id:
         return jsonify({'error': 'use_case_id required'}), 400
-    
+
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     try:
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         # Use GPT-4o Vision to generate a context-aware prompt
         if script and script.content:
             clips_config = manager.generate_clip_prompts(
@@ -2277,13 +2359,13 @@ def test_generate_single_clip():
             prompt = f"Beautiful product showcase of {product.name}, elegant presentation, professional studio lighting, premium quality"
             clip_type = 'product_showcase'
             ai_generated = False
-        
+
         # Get the public image URL from the product (original scraped URL)
         image_url = None
         if product.images and isinstance(product.images, list) and len(product.images) > 0:
             # Use the first public URL from the scraped images
             image_url = product.images[0]
-        
+
         # Fallback: check local folder only if no public URLs
         if not image_url:
             product_folder = os.path.join(upload_folder, 'products', str(product.id))
@@ -2291,7 +2373,7 @@ def test_generate_single_clip():
                 images = [f for f in os.listdir(product_folder) if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
                 if images:
                     image_url = f"/uploads/products/{product.id}/{images[0]}"
-        
+
         # Create single clip
         clip = manager.create_clip(
             use_case_id=use_case_id,
@@ -2299,14 +2381,14 @@ def test_generate_single_clip():
             prompt=prompt,
             length=5
         )
-        
+
         # Log what we're sending to Pollo
         current_app.logger.info(f"Test generate - Prompt: {prompt}")
         current_app.logger.info(f"Test generate - Image URL: {image_url}")
-        
+
         # Start generation
         result = manager.start_generation(clip.id)
-        
+
         return jsonify({
             'success': result.get('success'),
             'clip_id': clip.id,
@@ -2317,7 +2399,7 @@ def test_generate_single_clip():
             'pollo_result': result,
             'message': 'Check Pollo.ai dashboard to test this prompt directly'
         })
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Test generate error: {e}\n{traceback.format_exc()}")
@@ -2332,10 +2414,10 @@ def delete_video_clip(clip_id):
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         result = manager.delete_clip(clip_id)
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2347,15 +2429,15 @@ def reorder_video_clips(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
     data = request.get_json()
     clip_orders = data.get('clip_orders', [])
-    
+
     try:
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         result = manager.reorder_clips(use_case_id, clip_orders)
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2366,13 +2448,13 @@ def update_clip_prompt(clip_id):
     """Update the prompt for a clip (before generation)."""
     clip = VideoClip.query.get_or_404(clip_id)
     data = request.get_json()
-    
+
     if clip.status not in ['pending', 'error']:
         return jsonify({'error': 'Can only update prompts for pending or error clips'}), 400
-    
+
     clip.prompt = data.get('prompt', clip.prompt)
     db.session.commit()
-    
+
     return jsonify({
         'success': True,
         'clip': clip.to_dict()
@@ -2384,24 +2466,24 @@ def update_clip_prompt(clip_id):
 def get_generation_stats(use_case_id):
     """Get generation statistics for a use case."""
     use_case = UseCase.query.get_or_404(use_case_id)
-    
+
     try:
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         stats = manager.get_generation_stats(use_case_id)
-        
+
         # Update use case status if all clips are complete
         if stats['is_complete'] and use_case.status == 'generating':
             use_case.status = 'complete'
             db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'stats': stats
         })
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2450,15 +2532,15 @@ def analyze_clips(use_case_id):
     UseCase.query.get_or_404(use_case_id)
     data = request.get_json() or {}
     force = data.get('force', False)
-    
+
     try:
         api_key = current_app.config.get('MOONSHOT_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         analyzer = ClipAnalyzer(api_key=api_key)
-        
+
         result = analyzer.analyze_use_case_clips(use_case_id, upload_folder, force=force)
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2468,21 +2550,21 @@ def analyze_clips(use_case_id):
 def optimize_sequence(use_case_id):
     """Return a recommended sequence without applying it."""
     use_case = UseCase.query.get_or_404(use_case_id)
-    
+
     clips = VideoClip.query.filter_by(
         use_case_id=use_case_id,
         status='complete'
     ).order_by(VideoClip.sequence_order).all()
-    
+
     if not clips:
         return jsonify({'error': 'No complete clips found for optimization'}), 400
-    
+
     try:
         engine = ClipOrderingEngine()
         result = engine.recommend_order(clips, use_case)
         result['duration_check'] = result.get('duration_summary')
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2494,15 +2576,15 @@ def apply_sequence(use_case_id):
     UseCase.query.get_or_404(use_case_id)
     data = request.get_json() or {}
     sequence_order = data.get('sequence_order', [])
-    
+
     if not sequence_order:
         return jsonify({'error': 'No sequence order provided'}), 400
-    
+
     try:
         engine = ClipOrderingEngine()
         result = engine.apply_sequence(use_case_id, sequence_order)
         return jsonify(result)
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -2515,27 +2597,27 @@ def reorder_clips(use_case_id):
     UseCase.query.get_or_404(use_case_id)
     data = request.get_json() or {}
     clip_orders = data.get('clip_orders', [])
-    
+
     if not clip_orders:
         return jsonify({'error': 'No clip orders provided'}), 400
-    
+
     try:
         for item in clip_orders:
             clip = VideoClip.query.filter_by(
                 id=item['clip_id'],
                 use_case_id=use_case_id
             ).first()
-            
+
             if clip:
                 clip.sequence_order = item['sequence_order']
-        
+
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'message': 'Clip order updated successfully'
         })
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -2549,7 +2631,7 @@ def update_clip_order(use_case_id):
     data = request.get_json() or {}
     ordered_ids = data.get('ordered_clip_ids')
     clip_orders = data.get('clip_orders')
-    
+
     if ordered_ids:
         sequence_payload = [
             {
@@ -2568,18 +2650,18 @@ def update_clip_order(use_case_id):
         ]
     else:
         return jsonify({'error': 'ordered_clip_ids or clip_orders required'}), 400
-    
+
     try:
         engine = ClipOrderingEngine()
         result = engine.apply_sequence(use_case_id, sequence_payload)
         if not result.get('success'):
             return jsonify(result), 500
-        
+
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
         clips = manager.get_use_case_clips(use_case_id)
-        
+
         return jsonify({
             'success': True,
             'message': 'Clip order saved',
@@ -2595,21 +2677,21 @@ def update_clip_order(use_case_id):
 def auto_order_clips(use_case_id):
     """Run the ordering engine and immediately apply the recommendation."""
     use_case = UseCase.query.get_or_404(use_case_id)
-    
+
     clips = VideoClip.query.filter_by(
         use_case_id=use_case_id,
         status='complete'
     ).order_by(VideoClip.sequence_order).all()
-    
+
     if not clips:
         return jsonify({'error': 'No complete clips available for auto-ordering'}), 400
-    
+
     try:
         engine = ClipOrderingEngine()
         recommendation = engine.recommend_order(clips, use_case)
         if not recommendation.get('success'):
             return jsonify(recommendation), 400
-        
+
         sequence_payload = [
             {
                 'clip_id': item['clip_id'],
@@ -2620,12 +2702,12 @@ def auto_order_clips(use_case_id):
         apply_result = engine.apply_sequence(use_case_id, sequence_payload)
         if not apply_result.get('success'):
             return jsonify(apply_result), 500
-        
+
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
         clips_response = manager.get_use_case_clips(use_case_id)
-        
+
         return jsonify({
             'success': True,
             'recommendation': recommendation,
@@ -2643,11 +2725,11 @@ def get_assembly_data(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
-    
+
     upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
     api_key = current_app.config.get('POLLO_API_KEY')
     manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-    
+
     clips = manager.get_use_case_clips(use_case_id)
     stats = manager.get_generation_stats(use_case_id)
 
@@ -2657,7 +2739,7 @@ def get_assembly_data(use_case_id):
     target_duration = use_case.duration_target or 30
     variance = round(total_duration - target_duration, 2)
     analyzed_count = len([clip for clip in ordered_clips if clip.get('content_description')])
-    
+
     # Enhanced duration status with smart assembly info
     if total_duration < target_duration * 0.5:
         duration_status = 'insufficient'
@@ -2746,7 +2828,7 @@ def assemble_final_video(use_case_id):
     celery_available = bool(celery_app and current_app.config.get('CELERY_AVAILABLE', False))
     celery_disabled_reason = current_app.config.get('CELERY_DISABLED_REASON')
     running_in_render = bool(os.getenv('RENDER'))
-    
+
     if not celery_available and running_in_render:
         current_app.logger.error(
             'Async assembly is unavailable on Render: %s',
@@ -2759,12 +2841,12 @@ def assemble_final_video(use_case_id):
             'needs_configuration': True,
             'hint': 'Link the Render web service to the Redis instance so Celery can queue long-running ffmpeg jobs.'
         }), 503
-    
+
     if celery_available:
         # Async processing via Celery
         try:
             from app.tasks.video_tasks import assemble_final_video_async
-            
+
             options = {
                 'transition': transition,
                 'quality': quality,
@@ -2775,18 +2857,18 @@ def assemble_final_video(use_case_id):
                 'format_override': format_override,
                 'voiceover_path': data.get('voiceover_path')
             }
-            
+
             # Trigger async task
             task = assemble_final_video_async.delay(
                 use_case_id=use_case_id,
                 script_id=script.id,
                 options=options
             )
-            
+
             current_app.logger.info(
                 f'Async assembly triggered: task_id={task.id}, use_case={use_case_id}'
             )
-            
+
             return jsonify({
                 'success': True,
                 'async': True,
@@ -2795,12 +2877,12 @@ def assemble_final_video(use_case_id):
                 'message': 'Video assembly started in background. Poll for status.',
                 'poll_url': f'/api/use-cases/{use_case_id}/assembly-status/{task.id}'
             })
-            
+
         except Exception as e:
             current_app.logger.error(f'Failed to trigger async assembly: {e}')
             # Fall back to sync if Celery fails
             current_app.logger.info('Falling back to synchronous assembly')
-    
+
     # Synchronous processing (fallback)
     voiceover_path = data.get('voiceover_path')
     if include_voiceover:
@@ -2849,45 +2931,45 @@ def get_assembly_status(use_case_id, task_id):
     """Check the status of an async assembly job."""
     from app import celery as celery_app
     celery_available = bool(celery_app and current_app.config.get('CELERY_AVAILABLE', False))
-    
+
     if not celery_available:
         return jsonify({
             'success': False,
             'error': 'Async processing not available',
             'details': current_app.config.get('CELERY_DISABLED_REASON')
         }), 503
-    
+
     try:
         result = celery_app.AsyncResult(task_id)
-        
+
         response = {
             'task_id': task_id,
             'status': result.status,
             'success': result.successful() if result.ready() else None
         }
-        
+
         if result.status == 'PENDING':
             response['message'] = 'Assembly is queued and waiting to start...'
             response['progress'] = 0
-            
+
         elif result.status == 'STARTED':
             info = result.info or {}
             response['message'] = info.get('message', 'Assembly in progress...')
             response['progress'] = info.get('progress', 10)
             response['step'] = info.get('step', 'initializing')
-            
+
         elif result.status == 'PROGRESS':
             info = result.info or {}
             response['message'] = info.get('message', 'Processing...')
             response['progress'] = info.get('progress', 50)
             response['step'] = info.get('step', 'processing')
-            
+
         elif result.status == 'RETRY':
             info = result.info or {}
             response['message'] = info.get('message', 'Connection issue, retrying...')
             response['progress'] = info.get('progress', 5)
             response['step'] = info.get('step', 'retry')
-            
+
         elif result.ready():
             if result.successful():
                 result_data = result.get()
@@ -2902,9 +2984,9 @@ def get_assembly_status(use_case_id, task_id):
                 response['success'] = False
                 response['message'] = 'Assembly failed'
                 response['error'] = str(result.result) if result.result else 'Unknown error'
-                
+
         return jsonify(response)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error checking assembly status: {e}')
         return jsonify({
@@ -2923,7 +3005,7 @@ def get_final_video_info(use_case_id):
 
     data = final_video.to_dict()
     data['video_url'] = f"/uploads/{final_video.file_path}" if final_video.file_path else None
-    
+
     # Only return thumbnail URL if the file actually exists
     thumbnail_url = None
     if final_video.thumbnail_path:
@@ -2931,7 +3013,7 @@ def get_final_video_info(use_case_id):
         if os.path.exists(thumb_full_path):
             thumbnail_url = f"/uploads/{final_video.thumbnail_path}"
     data['thumbnail_url'] = thumbnail_url
-    
+
     data['download_url'] = url_for('main.download_final_video', use_case_id=use_case_id)
 
     return jsonify({'success': True, 'final_video': data})
@@ -2960,35 +3042,35 @@ def pollo_webhook():
     try:
         raw_body = request.get_data()
         payload = request.get_json(silent=True) or {}
-        
+
         # Verify webhook signature if secret is configured
         secret = current_app.config.get('POLLO_WEBHOOK_SECRET', '')
         signature = request.headers.get('X-Webhook-Signature') or request.headers.get('x-webhook-signature')
         webhook_id = request.headers.get('X-Webhook-Id') or request.headers.get('x-webhook-id')
         webhook_timestamp = request.headers.get('X-Webhook-Timestamp') or request.headers.get('x-webhook-timestamp')
-        
+
         # Log full details for debugging
-        current_app.logger.info('Webhook received: id=%s timestamp=%s signature=%s body=%s', 
+        current_app.logger.info('Webhook received: id=%s timestamp=%s signature=%s body=%s',
                                 webhook_id, webhook_timestamp, signature, raw_body.decode('utf-8')[:200] if raw_body else None)
-        
+
         # TEMPORARILY DISABLED: Signature verification needs debugging
         # if secret and signature:
         #     if not _verify_pollo_signature(secret, signature, raw_body, webhook_id, webhook_timestamp):
         #         current_app.logger.warning('Invalid signature for webhook %s', webhook_id)
         #         return jsonify({'error': 'Invalid signature'}), 401
-        
+
         # Extract task ID and status from payload
         task_id = payload.get('taskId') or payload.get('task_id') or _extract_nested_value(payload, 'data.taskId')
         status = _extract_pollo_status(payload)
-        
+
         if not task_id:
             return jsonify({'error': 'No task ID in payload'}), 400
-        
+
         # Find the clip by task ID
         clip = VideoClip.query.filter_by(pollo_job_id=task_id).first()
         if not clip:
             return jsonify({'error': 'Clip not found for task ID'}), 404
-        
+
         # Update clip based on status
         if status in ('completed', 'succeeded', 'success', 'done'):
             video_url = _extract_pollo_video_url(payload)
@@ -3015,11 +3097,11 @@ def pollo_webhook():
             # Still processing - update to generating if pending
             if clip.status == 'pending':
                 clip.status = 'generating'
-        
+
         db.session.commit()
-        
+
         return jsonify({'success': True, 'clip_id': clip.id, 'status': clip.status}), 200
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -3045,18 +3127,18 @@ def recover_pipeline(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
     data = request.get_json() or {}
     target_stage = data.get('target_stage')  # Optional: limit recovery to specific stage
-    
+
     try:
         recovery_service = PipelineRecoveryService()
         result = recovery_service.resume(use_case, target_stage=target_stage)
-        
+
         return jsonify({
             'success': result.get('success', False),
             'actions': result.get('actions', []),
             'errors': result.get('errors', []),
             'summary': result.get('summary')
         })
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Pipeline recovery failed: {e}\n{traceback.format_exc()}")
@@ -3072,28 +3154,28 @@ def recover_pipeline(use_case_id):
 def retry_failed_clips(use_case_id):
     """Retry all failed clips for a use case."""
     use_case = UseCase.query.get_or_404(use_case_id)
-    
+
     try:
         api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
-        
+
         # Find all failed clips
         failed_clips = VideoClip.query.filter_by(
             use_case_id=use_case_id,
             status='error'
         ).all()
-        
+
         if not failed_clips:
             return jsonify({
                 'success': True,
                 'message': 'No failed clips to retry',
                 'retried': 0
             })
-        
+
         retried = []
         errors = []
-        
+
         for clip in failed_clips:
             try:
                 result = manager.regenerate_clip(clip.id)
@@ -3113,7 +3195,7 @@ def retry_failed_clips(use_case_id):
                     'clip_id': clip.id,
                     'error': str(clip_error)
                 })
-        
+
         return jsonify({
             'success': len(errors) == 0,
             'message': f'Retried {len(retried)} failed clips',
@@ -3121,7 +3203,7 @@ def retry_failed_clips(use_case_id):
             'errors': errors,
             'total': len(failed_clips)
         })
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Retry failed clips error: {e}\n{traceback.format_exc()}")
@@ -3158,22 +3240,22 @@ def get_library_clips():
         sort_order = request.args.get('order', 'desc')
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 24))
-        
+
         # Build query
         query = ClipLibrary.query.filter_by(status='active')
-        
+
         if content_type:
             query = query.filter_by(content_type=content_type)
-        
+
         if style:
             query = query.filter_by(style=style)
-        
+
         if format_filter:
             query = query.filter_by(format=format_filter)
-        
+
         if favorites_only:
             query = query.filter_by(is_favorite=True)
-        
+
         if search:
             search_term = f"%{search}%"
             query = query.filter(
@@ -3183,18 +3265,18 @@ def get_library_clips():
                     ClipLibrary.tags.contains([search])
                 )
             )
-        
+
         # Apply sorting
         sort_column = getattr(ClipLibrary, sort_by, ClipLibrary.added_to_library_at)
         if sort_order == 'desc':
             query = query.order_by(sort_column.desc())
         else:
             query = query.order_by(sort_column.asc())
-        
+
         # Paginate
         pagination = query.paginate(page=page, per_page=per_page, error_out=False)
         clips = pagination.items
-        
+
         return jsonify({
             'success': True,
             'clips': [clip.to_dict() for clip in clips],
@@ -3207,7 +3289,7 @@ def get_library_clips():
                 'has_prev': pagination.has_prev
             }
         })
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Library clips error: {e}\n{traceback.format_exc()}")
@@ -3234,16 +3316,16 @@ def add_to_library():
     """Add a video clip to the library."""
     try:
         data = request.get_json() or {}
-        
+
         # Required: clip_id or manual entry
         clip_id = data.get('clip_id')
-        
+
         if clip_id:
             # Add existing clip to library
             clip = VideoClip.query.get_or_404(clip_id)
             use_case = UseCase.query.get(clip.use_case_id)
             product = Product.query.get(use_case.product_id) if use_case else None
-            
+
             # Check if already in library
             existing = ClipLibrary.query.filter_by(original_clip_id=clip_id).first()
             if existing:
@@ -3252,7 +3334,7 @@ def add_to_library():
                     'error': 'Clip is already in the library',
                     'library_clip_id': existing.id
                 }), 409
-            
+
             library_clip = ClipLibrary(
                 original_clip_id=clip.id,
                 original_product_id=product.id if product else None,
@@ -3284,16 +3366,16 @@ def add_to_library():
                 prompt=data.get('prompt'),
                 model_used=data.get('model_used')
             )
-        
+
         db.session.add(library_clip)
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'clip': library_clip.to_dict(),
             'message': 'Clip added to library successfully'
         })
-        
+
     except Exception as e:
         import traceback
         current_app.logger.error(f"Add to library error: {e}\n{traceback.format_exc()}")
@@ -3308,7 +3390,7 @@ def update_library_clip(clip_id):
     try:
         clip = ClipLibrary.query.get_or_404(clip_id)
         data = request.get_json() or {}
-        
+
         # Update allowed fields
         if 'name' in data:
             clip.name = data['name']
@@ -3324,15 +3406,15 @@ def update_library_clip(clip_id):
             clip.rating = max(0, min(5, int(data['rating'])))
         if 'is_favorite' in data:
             clip.is_favorite = bool(data['is_favorite'])
-        
+
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'clip': clip.to_dict(),
             'message': 'Clip updated successfully'
         })
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3346,12 +3428,12 @@ def delete_library_clip(clip_id):
         clip = ClipLibrary.query.get_or_404(clip_id)
         clip.status = 'archived'
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'message': 'Clip archived successfully'
         })
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3364,7 +3446,7 @@ def get_use_case_library_clips(use_case_id):
     try:
         use_case = UseCase.query.get_or_404(use_case_id)
         links = UseCaseLibraryClip.query.filter_by(use_case_id=use_case_id).order_by(UseCaseLibraryClip.sequence_order).all()
-        
+
         return jsonify({
             'success': True,
             'use_case_id': use_case_id,
@@ -3375,7 +3457,7 @@ def get_use_case_library_clips(use_case_id):
                 'clip': link.library_clip.to_dict()
             } for link in links]
         })
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -3388,32 +3470,32 @@ def add_library_clip_to_use_case(use_case_id):
         data = request.get_json() or {}
         library_clip_id = data.get('library_clip_id')
         sequence_order = data.get('sequence_order')
-        
+
         if not library_clip_id:
             return jsonify({'success': False, 'error': 'library_clip_id is required'}), 400
-        
+
         use_case = UseCase.query.get_or_404(use_case_id)
         library_clip = ClipLibrary.query.get_or_404(library_clip_id)
-        
+
         # If sequence_order not provided, add to end
         if sequence_order is None:
             existing_count = UseCaseLibraryClip.query.filter_by(use_case_id=use_case_id).count()
             sequence_order = existing_count
-        
+
         # Create link
         link = UseCaseLibraryClip(
             use_case_id=use_case_id,
             library_clip_id=library_clip_id,
             sequence_order=sequence_order
         )
-        
+
         db.session.add(link)
-        
+
         # Increment usage count
         library_clip.usage_count += 1
-        
+
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'link': {
@@ -3423,7 +3505,7 @@ def add_library_clip_to_use_case(use_case_id):
             },
             'message': 'Clip added to use case'
         })
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3435,19 +3517,19 @@ def remove_library_clip_from_use_case(use_case_id, link_id):
     """Remove a library clip from a use case."""
     try:
         link = UseCaseLibraryClip.query.filter_by(id=link_id, use_case_id=use_case_id).first_or_404()
-        
+
         # Decrement usage count
         if link.library_clip:
             link.library_clip.usage_count = max(0, link.library_clip.usage_count - 1)
-        
+
         db.session.delete(link)
         db.session.commit()
-        
+
         return jsonify({
             'success': True,
             'message': 'Clip removed from use case'
         })
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -3460,19 +3542,19 @@ def get_library_stats():
     try:
         total_clips = ClipLibrary.query.filter_by(status='active').count()
         favorites = ClipLibrary.query.filter_by(status='active', is_favorite=True).count()
-        
+
         # Count by content type
         content_types = db.session.query(
             ClipLibrary.content_type,
             db.func.count(ClipLibrary.id)
         ).filter_by(status='active').group_by(ClipLibrary.content_type).all()
-        
+
         # Count by style
         styles = db.session.query(
             ClipLibrary.style,
             db.func.count(ClipLibrary.id)
         ).filter_by(status='active').group_by(ClipLibrary.style).all()
-        
+
         return jsonify({
             'success': True,
             'stats': {
@@ -3482,6 +3564,6 @@ def get_library_stats():
                 'styles': {style: count for style, count in styles if style}
             }
         })
-        
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500

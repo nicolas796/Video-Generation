@@ -58,79 +58,66 @@
                         </a>
                     </div>
                     
-                    <!-- Stage 2: Spec Sheet -->
-                    <div class="pipeline-stage-wrapper" data-stage="spec">
-                        <a href="#" class="pipeline-stage-link" id="stage-spec" onclick="navigateToStage('spec', event)">
-                            <div class="pipeline-stage" data-stage="2">
-                                <div class="stage-icon">
-                                    <i class="bi bi-file-earmark-text"></i>
-                                </div>
-                                <span class="stage-number">2</span>
-                                <span class="stage-label">Spec Sheet</span>
-                            </div>
-                        </a>
-                    </div>
-                    
-                    <!-- Stage 3: Use Case -->
+                    <!-- Stage 2: Use Case -->
                     <div class="pipeline-stage-wrapper" data-stage="usecase">
-                        <a href="#" class="pipeline-stage-link" id="stage-usecase" onclick="navigateToStage('usecase', event)">
-                            <div class="pipeline-stage" data-stage="3">
+                        <a href="#" class="pipeline-stage-link" id="stage-usecase">
+                            <div class="pipeline-stage" data-stage="2">
                                 <div class="stage-icon">
                                     <i class="bi bi-sliders"></i>
                                 </div>
-                                <span class="stage-number">3</span>
+                                <span class="stage-number">2</span>
                                 <span class="stage-label">Use Case</span>
                             </div>
                         </a>
                     </div>
                     
-                    <!-- Stage 4: Script -->
+                    <!-- Stage 3: Script -->
                     <div class="pipeline-stage-wrapper" data-stage="script">
-                        <a href="#" class="pipeline-stage-link" id="stage-script" onclick="navigateToStage('script', event)">
-                            <div class="pipeline-stage" data-stage="4">
+                        <a href="#" class="pipeline-stage-link" id="stage-script">
+                            <div class="pipeline-stage" data-stage="3">
                                 <div class="stage-icon">
                                     <i class="bi bi-chat-square-text"></i>
                                 </div>
-                                <span class="stage-number">4</span>
+                                <span class="stage-number">3</span>
                                 <span class="stage-label">Script</span>
                             </div>
                         </a>
                     </div>
                     
-                    <!-- Stage 5: Video Gen -->
+                    <!-- Stage 4: Video Gen -->
                     <div class="pipeline-stage-wrapper" data-stage="video_gen">
-                        <a href="#" class="pipeline-stage-link" id="stage-video_gen" onclick="navigateToStage('video_gen', event)">
-                            <div class="pipeline-stage" data-stage="5">
+                        <a href="#" class="pipeline-stage-link" id="stage-video_gen">
+                            <div class="pipeline-stage" data-stage="4">
                                 <div class="stage-icon">
                                     <i class="bi bi-camera-video"></i>
                                 </div>
-                                <span class="stage-number">5</span>
+                                <span class="stage-number">4</span>
                                 <span class="stage-label">Video Gen</span>
                             </div>
                         </a>
                     </div>
                     
-                    <!-- Stage 6: Assembly -->
+                    <!-- Stage 5: Assembly -->
                     <div class="pipeline-stage-wrapper" data-stage="assembly">
-                        <a href="#" class="pipeline-stage-link" id="stage-assembly" onclick="navigateToStage('assembly', event)">
-                            <div class="pipeline-stage" data-stage="6">
+                        <a href="#" class="pipeline-stage-link" id="stage-assembly">
+                            <div class="pipeline-stage" data-stage="5">
                                 <div class="stage-icon">
                                     <i class="bi bi-collection-play"></i>
                                 </div>
-                                <span class="stage-number">6</span>
+                                <span class="stage-number">5</span>
                                 <span class="stage-label">Assembly</span>
                             </div>
                         </a>
                     </div>
                     
-                    <!-- Stage 7: Output -->
+                    <!-- Stage 6: Output -->
                     <div class="pipeline-stage-wrapper" data-stage="output">
-                        <a href="#" class="pipeline-stage-link" id="stage-output" onclick="navigateToStage('output', event)">
-                            <div class="pipeline-stage" data-stage="7">
+                        <a href="#" class="pipeline-stage-link" id="stage-output">
+                            <div class="pipeline-stage" data-stage="6">
                                 <div class="stage-icon">
                                     <i class="bi bi-play-circle"></i>
                                 </div>
-                                <span class="stage-number">7</span>
+                                <span class="stage-number">6</span>
                                 <span class="stage-label">Output</span>
                             </div>
                         </a>
@@ -257,19 +244,18 @@
 <script>
     let dashboardData = null;
     
-    // Stage navigation mapping - maps stage name to URL patterns
-    const stageNav = {
-        'scrape': { url: '/scrape', needsId: false },
-        'spec': { url: '/spec-sheet', needsId: true, idField: 'product_id' },
-        'usecase': { url: '/use-case', needsId: true, idField: 'product_id' },
-        'script': { url: '/script', needsId: true, idField: 'use_case_id' },
-        'video_gen': { url: '/video-gen', needsId: true, idField: 'use_case_id' },
-        'assembly': { url: '/assembly', needsId: true, idField: 'use_case_id' },
-        'output': { url: '/output', needsId: true, idField: 'use_case_id' }
-    };
+    // Stage order for progress calculation (7 stages)
+    const stageOrder = ['scrape', 'usecase', 'script', 'video_gen', 'assembly', 'output'];
     
-    // Stage order for progress calculation
-    const stageOrder = ['scrape', 'spec', 'usecase', 'script', 'video_gen', 'assembly', 'output'];
+    // Stage display names
+    const stageNames = {
+        'scrape': 'Scrape',
+        'usecase': 'Use Case', 
+        'script': 'Script',
+        'video_gen': 'Video Gen',
+        'assembly': 'Assembly',
+        'output': 'Output'
+    };
     
     function getMostRecentProject() {
         // First try active projects, then recent products
@@ -283,7 +269,9 @@
     }
     
     function navigateToStage(stage, event) {
-        event.preventDefault();
+        if (event) {
+            event.preventDefault();
+        }
         
         // Scrape stage always goes to /scrape
         if (stage === 'scrape') {
@@ -295,8 +283,11 @@
         
         if (!project) {
             // No projects at all - show modal
-            const modal = new bootstrap.Modal(document.getElementById('noProjectModal'));
-            modal.show();
+            const modalEl = document.getElementById('noProjectModal');
+            if (modalEl) {
+                const modal = new bootstrap.Modal(modalEl);
+                modal.show();
+            }
             return;
         }
         
@@ -307,8 +298,6 @@
                 url = '/scrape';
                 break;
             case 'spec':
-                url = `/spec-sheet/${project.product_id}`;
-                break;
             case 'usecase':
                 url = `/use-case/${project.product_id}`;
                 break;
@@ -317,7 +306,6 @@
                 if (project.use_case_id) {
                     url = `/script/${project.use_case_id}`;
                 } else {
-                    // Need to create use case first
                     url = `/use-case/${project.product_id}`;
                 }
                 break;
@@ -350,7 +338,10 @@
     }
     
     function startScraping() {
-        const url = document.getElementById('productUrl').value.trim();
+        const urlInput = document.getElementById('productUrl');
+        if (!urlInput) return;
+        
+        const url = urlInput.value.trim();
         if (!url) {
             alert('Please enter a product URL');
             return;
@@ -368,26 +359,30 @@
         const section = document.getElementById('continueSection');
         const countBadge = document.getElementById('activeProjectCount');
         
+        if (!container || !section) return;
+        
         if (!projects || projects.length === 0) {
             section.classList.add('d-none');
             return;
         }
         
         section.classList.remove('d-none');
-        countBadge.textContent = `${projects.length} active`;
+        if (countBadge) {
+            countBadge.textContent = `${projects.length} active`;
+        }
         
         container.innerHTML = projects.map(project => `
             <div class="col-md-4 mb-3">
                 <div class="card h-100 border-0 shadow-sm">
                     <div class="card-body">
-                        <h6 class="card-title text-truncate" title="${project.product_name}">${project.product_name}</h6>
-                        <p class="card-text small text-muted mb-2">${project.use_case_name || 'New Use Case'}</p>
+                        <h6 class="card-title text-truncate" title="${escapeHtml(project.product_name)}">${escapeHtml(project.product_name)}</h6>
+                        <p class="card-text small text-muted mb-2">${escapeHtml(project.use_case_name || 'New Use Case')}</p>
                         <div class="d-flex justify-content-between align-items-center mb-2">
-                            <span class="badge bg-primary">${project.stage_label}</span>
+                            <span class="badge bg-primary">${escapeHtml(project.stage_label)}</span>
                             <small class="text-muted">${Math.round(project.progress_pct)}%</small>
                         </div>
                         <div class="progress mb-3" style="height: 6px;">
-                            <div class="progress-bar" role="progressbar" style="width: ${project.progress_pct}%"></div>
+                            <div class="progress-bar" role="progressbar" style="width: ${Math.min(project.progress_pct, 100)}%"></div>
                         </div>
                         <a href="${project.next_url}" class="btn btn-sm btn-warning w-100">
                             <i class="bi bi-arrow-return-right me-1"></i>
@@ -401,6 +396,8 @@
     
     function renderRecentProducts(products) {
         const container = document.getElementById('recentProductsList');
+        
+        if (!container) return;
         
         if (!products || products.length === 0) {
             container.innerHTML = `
@@ -421,18 +418,25 @@
                                 <i class="bi bi-box text-primary"></i>
                             </div>
                             <div>
-                                <h6 class="mb-0">${item.product.name}</h6>
-                                <small class="text-muted">${item.product.brand || 'No brand'} • ${item.use_case_count} use case(s)</small>
+                                <h6 class="mb-0">${escapeHtml(item.product.name)}</h6>
+                                <small class="text-muted">${escapeHtml(item.product.brand || 'No brand')} • ${item.use_case_count} use case(s)</small>
                             </div>
                         </div>
                         <div class="text-end">
-                            <span class="badge bg-${getStageColor(item.current_stage)} mb-1 d-block">${item.stage_label}</span>
+                            <span class="badge bg-${getStageColor(item.current_stage)} mb-1 d-block">${escapeHtml(item.stage_label)}</span>
                             <small class="text-muted">${Math.round(item.progress_pct)}% complete</small>
                         </div>
                     </a>
                 `).join('')}
             </div>
         `;
+    }
+    
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
     
     function getStageColor(stage) {
@@ -449,10 +453,16 @@
     }
     
     function updateStats(stats) {
-        document.getElementById('statProducts').textContent = stats.total_products || 0;
-        document.getElementById('statUseCases').textContent = stats.total_use_cases || 0;
-        document.getElementById('statClips').textContent = stats.total_clips || 0;
-        document.getElementById('statVideos').textContent = stats.total_final_videos || 0;
+        if (!stats) return;
+        const statProducts = document.getElementById('statProducts');
+        const statUseCases = document.getElementById('statUseCases');
+        const statClips = document.getElementById('statClips');
+        const statVideos = document.getElementById('statVideos');
+        
+        if (statProducts) statProducts.textContent = stats.total_products || 0;
+        if (statUseCases) statUseCases.textContent = stats.total_use_cases || 0;
+        if (statClips) statClips.textContent = stats.total_clips || 0;
+        if (statVideos) statVideos.textContent = stats.total_final_videos || 0;
     }
     
     function updatePipelineVisuals(activeProjects) {
@@ -464,9 +474,12 @@
             project = dashboardData.recent_products[0];
         }
         
+        const progressBar = document.getElementById('pipelineProgress');
+        if (!progressBar) return;
+        
         if (!project) {
             // Reset pipeline
-            document.getElementById('pipelineProgress').style.width = '0%';
+            progressBar.style.width = '0%';
             document.querySelectorAll('.pipeline-stage').forEach(stage => {
                 stage.classList.remove('active', 'complete');
             });
@@ -478,12 +491,14 @@
         const currentIndex = stageOrder.indexOf(currentStage);
         
         // Update progress bar
-        document.getElementById('pipelineProgress').style.width = progress + '%';
+        progressBar.style.width = Math.min(progress, 100) + '%';
         
         // Update stage classes
         const stages = document.querySelectorAll('.pipeline-stage-wrapper');
         stages.forEach((wrapper, index) => {
             const stageEl = wrapper.querySelector('.pipeline-stage');
+            if (!stageEl) return;
+            
             stageEl.classList.remove('active', 'complete');
             
             if (index < currentIndex) {
@@ -500,53 +515,36 @@
     function updateStageLinks(project) {
         if (!project) return;
         
-        // Update spec link
-        const specLink = document.getElementById('stage-spec');
-        if (specLink) specLink.href = `/spec-sheet/${project.product_id}`;
+        // Helper to safely update link
+        const updateLink = (id, url) => {
+            const link = document.getElementById(id);
+            if (link) {
+                link.href = url;
+                link.onclick = null; // Remove the onclick handler since we have a proper URL now
+            }
+        };
+        
+        // Update scrape link (always goes to /scrape)
+        updateLink('stage-scrape', '/scrape');
         
         // Update usecase link
-        const usecaseLink = document.getElementById('stage-usecase');
-        if (usecaseLink) usecaseLink.href = `/use-case/${project.product_id}`;
+        updateLink('stage-usecase', `/use-case/${project.product_id}`);
         
         // Update script link (needs use_case_id)
-        const scriptLink = document.getElementById('stage-script');
-        if (scriptLink) {
-            if (project.use_case_id) {
-                scriptLink.href = `/script/${project.use_case_id}`;
-            } else {
-                scriptLink.href = `/use-case/${project.product_id}`;
-            }
-        }
+        const scriptUrl = project.use_case_id ? `/script/${project.use_case_id}` : `/use-case/${project.product_id}`;
+        updateLink('stage-script', scriptUrl);
         
         // Update video gen link
-        const videoLink = document.getElementById('stage-video_gen');
-        if (videoLink) {
-            if (project.use_case_id) {
-                videoLink.href = `/video-gen/${project.use_case_id}`;
-            } else {
-                videoLink.href = `/use-case/${project.product_id}`;
-            }
-        }
+        const videoUrl = project.use_case_id ? `/video-gen/${project.use_case_id}` : `/use-case/${project.product_id}`;
+        updateLink('stage-video_gen', videoUrl);
         
         // Update assembly link
-        const assemblyLink = document.getElementById('stage-assembly');
-        if (assemblyLink) {
-            if (project.use_case_id) {
-                assemblyLink.href = `/assembly/${project.use_case_id}`;
-            } else {
-                assemblyLink.href = `/use-case/${project.product_id}`;
-            }
-        }
+        const assemblyUrl = project.use_case_id ? `/assembly/${project.use_case_id}` : `/use-case/${project.product_id}`;
+        updateLink('stage-assembly', assemblyUrl);
         
         // Update output link
-        const outputLink = document.getElementById('stage-output');
-        if (outputLink) {
-            if (project.use_case_id) {
-                outputLink.href = `/output/${project.use_case_id}`;
-            } else {
-                outputLink.href = `/use-case/${project.product_id}`;
-            }
-        }
+        const outputUrl = project.use_case_id ? `/output/${project.use_case_id}` : `/use-case/${project.product_id}`;
+        updateLink('stage-output', outputUrl);
     }
     
     async function loadDashboardData() {
@@ -560,13 +558,23 @@
                 renderActiveProjects(data.active_projects);
                 renderRecentProducts(data.recent_products);
                 updatePipelineVisuals(data.active_projects);
+            } else {
+                console.error('Dashboard API returned error:', data);
+                showDashboardError('Failed to load dashboard data');
             }
         } catch (error) {
             console.error('Failed to load dashboard data:', error);
-            document.getElementById('recentProductsList').innerHTML = `
+            showDashboardError('Failed to load dashboard data. Please refresh the page.');
+        }
+    }
+    
+    function showDashboardError(message) {
+        const container = document.getElementById('recentProductsList');
+        if (container) {
+            container.innerHTML = `
                 <div class="alert alert-warning">
                     <i class="bi bi-exclamation-triangle me-2"></i>
-                    Failed to load dashboard data. Please refresh the page.
+                    ${escapeHtml(message)}
                 </div>
             `;
         }
@@ -575,11 +583,14 @@
     // Initialize
     document.addEventListener('DOMContentLoaded', function() {
         loadDashboardData();
-    });
-    
-    // Allow Enter key to submit
-    document.getElementById('productUrl')?.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') startScraping();
+        
+        // Allow Enter key to submit
+        const productUrlInput = document.getElementById('productUrl');
+        if (productUrlInput) {
+            productUrlInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') startScraping();
+            });
+        }
     });
 </script>
 {% endblock %}

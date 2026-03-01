@@ -854,6 +854,8 @@ const numClips = {{ use_case.num_clips or 4 }};
 let clips = [];
 let currentClipId = null;
 let statusInterval = null;
+let pollingStartTime = null;
+const MAX_POLLING_DURATION_MS = 30 * 60 * 1000; // 30 minutes max polling
 
 // Load clips on page load
 document.addEventListener('DOMContentLoaded', function() {
@@ -901,10 +903,22 @@ async function loadClips() {
             // Auto-refresh if any clips are generating
             const hasGenerating = clips.some(c => c.status === 'generating');
             if (hasGenerating && !statusInterval) {
+                pollingStartTime = Date.now();
                 statusInterval = setInterval(loadClips, 5000);
             } else if (!hasGenerating && statusInterval) {
                 clearInterval(statusInterval);
                 statusInterval = null;
+                pollingStartTime = null;
+            } else if (hasGenerating && statusInterval && pollingStartTime) {
+                // Check if we've been polling too long
+                const elapsed = Date.now() - pollingStartTime;
+                if (elapsed > MAX_POLLING_DURATION_MS) {
+                    console.warn('Polling timeout reached - stopping auto-refresh');
+                    clearInterval(statusInterval);
+                    statusInterval = null;
+                    pollingStartTime = null;
+                    showToast('Generation monitoring timed out. Refresh the page to check status.', 'info');
+                }
             }
         }
     } catch (error) {
@@ -1215,6 +1229,7 @@ async function generateVideoClips() {
             
             loadClips();
             // Start polling
+            pollingStartTime = Date.now();
             statusInterval = setInterval(loadClips, 5000);
         } else {
             alert('Error starting generation: ' + (data.error || 'Unknown error'));
@@ -1397,9 +1412,10 @@ async function startGenerationWithGeneratedScene(imageUrl, clipCount) {
             } else {
                 showToast(`Started generation of ${startedCount} clip(s)`);
             }
-            
+
             loadClips();
             // Start polling
+            pollingStartTime = Date.now();
             statusInterval = setInterval(loadClips, 5000);
         } else {
             alert('Error starting generation: ' + (data.error || 'Unknown error'));
@@ -1519,6 +1535,7 @@ async function confirmRegenerate() {
             loadClips();
             // Start polling
             if (!statusInterval) {
+                pollingStartTime = Date.now();
                 statusInterval = setInterval(loadClips, 5000);
             }
         } else {

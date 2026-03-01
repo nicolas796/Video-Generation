@@ -77,11 +77,13 @@ class Product(db.Model):
         """Get the current pipeline stage information for this product.
         
         Returns a dict with:
-        - stage: the current stage name (scrape, spec, usecase, script, video_gen, assembly, output)
-        - label: human-readable label
+        - current_stage: the current stage name (scrape, usecase, script, video_gen, assembly, output)
+        - stage_label: human-readable label
         - progress_pct: approximate completion percentage
         - next_url: URL to continue work
         - use_case_id: current use case ID (if any)
+        - use_case_name: current use case name (if any)
+        - is_complete: whether the project is fully complete
         """
         from app import db
         
@@ -90,12 +92,13 @@ class Product(db.Model):
         
         if not use_cases:
             return {
-                'stage': 'spec',
-                'label': 'Scraped - Needs Use Case',
-                'progress_pct': 16.7,
+                'current_stage': 'usecase',
+                'stage_label': 'Scraped - Needs Use Case',
+                'progress_pct': 14.3,
                 'next_url': f"/use-case/{self.id}",
                 'use_case_id': None,
-                'use_case_name': None
+                'use_case_name': None,
+                'is_complete': False
             }
         
         # Get most recent use case
@@ -106,87 +109,98 @@ class Product(db.Model):
         
         if not script:
             return {
-                'stage': 'script',
-                'label': 'Needs Script',
-                'progress_pct': 33.3,
+                'current_stage': 'script',
+                'stage_label': 'Needs Script',
+                'progress_pct': 28.6,
                 'next_url': f"/script/{use_case.id}",
                 'use_case_id': use_case.id,
-                'use_case_name': use_case.name
+                'use_case_name': use_case.name,
+                'is_complete': False
             }
         
         if script.status != 'approved':
             return {
-                'stage': 'script',
-                'label': 'Script Pending Approval',
-                'progress_pct': 41.7,
+                'current_stage': 'script',
+                'stage_label': 'Script Pending Approval',
+                'progress_pct': 42.9,
                 'next_url': f"/script/{use_case.id}",
                 'use_case_id': use_case.id,
-                'use_case_name': use_case.name
+                'use_case_name': use_case.name,
+                'is_complete': False
             }
         
         # Check video clips
         clips = VideoClip.query.filter_by(use_case_id=use_case.id).all()
         complete_clips = [c for c in clips if c.status == 'complete']
+        error_clips = [c for c in clips if c.status == 'error']
+        pending_clips = [c for c in clips if c.status in ('pending', 'generating')]
         
-        if not clips or len(complete_clips) < use_case.num_clips:
-            pending = len([c for c in clips if c.status in ('pending', 'generating')])
-            error = len([c for c in clips if c.status == 'error'])
-            
-            if error > 0:
-                label = f'Video Generation - {error} Error(s)'
-            elif pending > 0:
-                label = f'Video Generation - {len(complete_clips)}/{use_case.num_clips} Complete'
+        target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
+        
+        # If not all clips are complete, we're in video_gen stage
+        if len(complete_clips) < target_clips:
+            if error_clips:
+                label = f'Video Gen - {len(error_clips)} Error(s)'
+            elif pending_clips:
+                label = f'Video Gen - {len(complete_clips)}/{target_clips} Complete'
             else:
-                label = 'Video Generation - Starting'
+                label = 'Video Gen - Starting'
+            
+            clip_progress = (len(complete_clips) / max(target_clips, 1)) * 14.3
             
             return {
-                'stage': 'video_gen',
-                'label': label,
-                'progress_pct': 50.0 + (len(complete_clips) / max(use_case.num_clips, 1)) * 16.7,
+                'current_stage': 'video_gen',
+                'stage_label': label,
+                'progress_pct': 42.9 + clip_progress,
                 'next_url': f"/video-gen/{use_case.id}",
                 'use_case_id': use_case.id,
-                'use_case_name': use_case.name
+                'use_case_name': use_case.name,
+                'is_complete': False
             }
         
-        # Check for final video
+        # All clips complete - check assembly status
         final_video = FinalVideo.query.filter_by(use_case_id=use_case.id).order_by(FinalVideo.created_at.desc()).first()
         
         if not final_video:
             return {
-                'stage': 'assembly',
-                'label': 'Ready for Assembly',
-                'progress_pct': 83.3,
+                'current_stage': 'assembly',
+                'stage_label': 'Ready for Assembly',
+                'progress_pct': 71.4,
                 'next_url': f"/assembly/{use_case.id}",
                 'use_case_id': use_case.id,
-                'use_case_name': use_case.name
+                'use_case_name': use_case.name,
+                'is_complete': False
             }
         
         if final_video.status == 'complete':
             return {
-                'stage': 'output',
-                'label': 'Final Video Ready',
+                'current_stage': 'output',
+                'stage_label': 'Final Video Ready',
                 'progress_pct': 100.0,
                 'next_url': f"/output/{use_case.id}",
                 'use_case_id': use_case.id,
-                'use_case_name': use_case.name
+                'use_case_name': use_case.name,
+                'is_complete': True
             }
         elif final_video.status == 'error':
             return {
-                'stage': 'assembly',
-                'label': 'Assembly Failed - Retry',
-                'progress_pct': 83.3,
+                'current_stage': 'assembly',
+                'stage_label': 'Assembly Failed - Retry',
+                'progress_pct': 71.4,
                 'next_url': f"/assembly/{use_case.id}",
                 'use_case_id': use_case.id,
-                'use_case_name': use_case.name
+                'use_case_name': use_case.name,
+                'is_complete': False
             }
         else:
             return {
-                'stage': 'assembly',
-                'label': 'Assembling Video...',
-                'progress_pct': 91.7,
+                'current_stage': 'assembly',
+                'stage_label': 'Assembling Video...',
+                'progress_pct': 85.7,
                 'next_url': f"/assembly/{use_case.id}",
                 'use_case_id': use_case.id,
-                'use_case_name': use_case.name
+                'use_case_name': use_case.name,
+                'is_complete': False
             }
 
 class UseCase(db.Model):
