@@ -18,7 +18,7 @@ beautifulsoup4==4.12.3
 
 # Image Processing
 Pillow==12.1.1
-rembg==2.0.72  # Background removal for product images (py3.14-compatible)
+rembg==2.0.60  # Background removal - pinned for numpy 1.x compatibility
 
 # Video Processing
 ffmpeg-python==0.2.0
