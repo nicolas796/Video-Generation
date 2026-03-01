@@ -26,10 +26,10 @@ celery = Celery(
 
 # Additional configuration
 celery.conf.update(
-    # Task serialization
+    # Task serialization - use pickle for results to handle exceptions properly
     task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
+    accept_content=['json', 'pickle'],
+    result_serializer='pickle',
     
     # Task execution
     task_track_started=True,
