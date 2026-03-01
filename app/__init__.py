@@ -1,7 +1,12 @@
+import os
+
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_wtf.csrf import CSRFProtect
+from kombu import Connection
+from kombu.exceptions import OperationalError
+
 from config import config
 
 # Initialize extensions
@@ -12,9 +17,53 @@ csrf = CSRFProtect()
 # Celery instance (initialized with app in create_app)
 celery = None
 
+def _verify_celery_connectivity(app):
+    """Ensure the Celery broker/backends are reachable to avoid runtime hangs."""
+    # Support both lowercase (Celery 6.0) and uppercase (legacy) config keys
+    broker_url = app.config.get('celery_broker_url') or app.config.get('CELERY_BROKER_URL')
+    if not broker_url:
+        raise RuntimeError('CELERY_BROKER_URL is not configured. Set REDIS_URL or CELERY_BROKER_URL.')
+    connection = None
+    try:
+        connection = Connection(broker_url)
+        connection.ensure_connection(max_retries=1, interval_start=0, interval_step=0.2, interval_max=0.5)
+    except OperationalError as exc:
+        raise RuntimeError(f'Unable to reach Celery broker ({broker_url}): {exc}') from exc
+    finally:
+        if connection:
+            connection.release()
+    backend_url = app.config.get('celery_result_backend') or app.config.get('CELERY_RESULT_BACKEND')
+    if backend_url and backend_url != broker_url:
+        backend_connection = None
+        try:
+            backend_connection = Connection(backend_url)
+            backend_connection.ensure_connection(max_retries=1, interval_start=0, interval_step=0.2, interval_max=0.5)
+        except OperationalError as exc:
+            raise RuntimeError(f'Unable to reach Celery result backend ({backend_url}): {exc}') from exc
+        finally:
+            if backend_connection:
+                backend_connection.release()
+
+def _init_celery(app):
+    """Initialize Celery and disable it cleanly if configuration is missing."""
+    app.config.setdefault('CELERY_AVAILABLE', False)
+    app.config.setdefault('CELERY_DISABLED_REASON', None)
+    global celery
+    try:
+        from app.celery_app import make_celery
+        celery = make_celery(app)
+        _verify_celery_connectivity(app)
+        app.config['CELERY_AVAILABLE'] = True
+        app.config['CELERY_DISABLED_REASON'] = None
+        app.logger.info("Celery initialized successfully")
+    except Exception as e:
+        app.logger.warning(f"Celery initialization failed (async tasks unavailable): {e}")
+        app.config['CELERY_AVAILABLE'] = False
+        app.config['CELERY_DISABLED_REASON'] = str(e)
+        celery = None
+
 def create_app(config_name='default'):
     """Application factory pattern."""
-    import os
     # Get the absolute path to the template and static folders
     base_dir = os.path.abspath(os.path.dirname(__file__))
     template_dir = os.path.join(os.path.dirname(base_dir), 'templates')
@@ -33,14 +82,7 @@ def create_app(config_name='default'):
     csrf.init_app(app)
     
     # Initialize Celery with Flask app context
-    try:
-        from app.celery_app import make_celery
-        global celery
-        celery = make_celery(app)
-        app.logger.info("Celery initialized successfully")
-    except Exception as e:
-        app.logger.warning(f"Celery initialization failed (async tasks unavailable): {e}")
-        celery = None
+    _init_celery(app)
     
     # Initialize WhiteNoise for static files in production
     if app.config['FLASK_ENV'] == 'production':
@@ -57,8 +99,6 @@ def create_app(config_name='default'):
     
     # Ensure upload directories exist and create default admin
     with app.app_context():
-        import os
-        
         # Log upload folder location for debugging
         upload_folder = app.config['UPLOAD_FOLDER']
         app.logger.info(f"Upload folder: {upload_folder}")
