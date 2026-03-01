@@ -1999,10 +1999,14 @@ def generate_video_clips(use_case_id):
     product = Product.query.get_or_404(use_case.product_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
 
+    current_app.logger.info(f'Generate clips request: use_case={use_case_id}, product={product.id}, script_exists={bool(script)}')
+
     if not script:
+        current_app.logger.warning(f'No script found for use_case {use_case_id}')
         return jsonify({'error': 'No script found. Generate a script first.'}), 400
 
     if script.status != 'approved':
+        current_app.logger.warning(f'Script not approved for use_case {use_case_id}: status={script.status}')
         return jsonify({'error': 'Script must be approved before generating videos.'}), 400
 
     try:
@@ -2028,7 +2032,10 @@ def generate_video_clips(use_case_id):
         # Clamp to valid range
         count = max(1, min(requested_count, remaining_clips))
 
+        current_app.logger.info(f'Clip generation check: existing={existing_clips}, target={target_clips}, remaining={remaining_clips}, requested={requested_count}, count={count}')
+
         if remaining_clips <= 0:
+            current_app.logger.warning(f'No remaining clips for use_case {use_case_id}: existing={existing_clips}, target={target_clips}')
             return jsonify({'error': f'All {target_clips} clips already generated. Delete one to regenerate.'}), 400
 
         # Get scene template and other parameters
