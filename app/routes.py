@@ -2882,6 +2882,12 @@ def get_assembly_status(use_case_id, task_id):
             response['progress'] = info.get('progress', 50)
             response['step'] = info.get('step', 'processing')
             
+        elif result.status == 'RETRY':
+            info = result.info or {}
+            response['message'] = info.get('message', 'Connection issue, retrying...')
+            response['progress'] = info.get('progress', 5)
+            response['step'] = info.get('step', 'retry')
+            
         elif result.ready():
             if result.successful():
                 result_data = result.get()

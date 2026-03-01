@@ -160,29 +160,15 @@ def assemble_final_video_async(
         
     except SoftTimeLimitExceeded:
         db.session.rollback()
-        self.update_state(
-            state=states.FAILURE,
-            meta={
-                'step': 'timeout',
-                'progress': 0,
-                'message': 'Assembly timed out (30 min limit)'
-            }
-        )
+        # Let Celery handle the failure state - don't manually set it
         raise
         
     except Exception as exc:
         db.session.rollback()
         current_app.logger.exception("Assembly failed")
         
-        # Update state to show error
-        self.update_state(
-            state=states.FAILURE,
-            meta={
-                'step': 'error',
-                'progress': 0,
-                'message': f'Error: {str(exc)}'
-            }
-        )
+        # Don't manually set FAILURE state here - let Celery handle it
+        # Manual FAILURE state interferes with retry exception serialization
         
         # Retry with exponential backoff
         countdown = 60 * (2 ** self.request.retries)
