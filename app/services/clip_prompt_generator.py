@@ -31,7 +31,9 @@ class ClipPromptGenerator:
         self._last_api_call = 0  # For rate limiting
         
         if self.api_key:
-            http_client = httpx.Client(timeout=60.0, follow_redirects=True)
+            # Use shorter timeout to avoid gunicorn worker timeout (30s limit)
+            # 15s timeout leaves room for other processing
+            http_client = httpx.Client(timeout=15.0, follow_redirects=True)
             self.client = OpenAI(api_key=self.api_key, http_client=http_client)
         
         self._logger = logging.getLogger(self.__class__.__name__)
@@ -79,21 +81,31 @@ class ClipPromptGenerator:
         
         clips_config = []
         
+        # TEMPORARILY DISABLED: AI prompt generation causes timeouts on Render
+        # Each API call takes 10-15s, and with multiple clips we exceed 30s gunicorn limit
+        # TODO: Re-enable with async parallel calls or background processing
+        use_ai = False  # Set to True to re-enable AI prompts
+        
         for i, clip_type in enumerate(clip_types):
             # Select the best product image for this clip type
             image_path = self._select_image_for_clip(product_images, clip_type, i)
             
-            # Generate AI-powered prompt
-            prompt_data = self._generate_ai_prompt(
-                product=product,
-                use_case=use_case,
-                clip_type=clip_type,
-                clip_index=i,
-                total_clips=num_clips,
-                script_segment=script_segments[i] if i < len(script_segments) else "",
-                full_script=script_content,
-                image_path=image_path
-            )
+            if use_ai and self.client:
+                # Generate AI-powered prompt (DISABLED - too slow on Render)
+                prompt_data = self._generate_ai_prompt(
+                    product=product,
+                    use_case=use_case,
+                    clip_type=clip_type,
+                    clip_index=i,
+                    total_clips=num_clips,
+                    script_segment=script_segments[i] if i < len(script_segments) else "",
+                    full_script=script_content,
+                    image_path=image_path
+                )
+            else:
+                # Use fast template-based prompts
+                prompt_data = self._fallback_prompt(product, use_case, clip_type, 
+                                                   script_segments[i] if i < len(script_segments) else "")
             
             clips_config.append({
                 'sequence_order': i,
@@ -253,7 +265,8 @@ class ClipPromptGenerator:
                 image_path=image_path
             )
             
-            # Make the API call
+            # Make the API call with timeout protection
+            import httpx
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -262,7 +275,8 @@ class ClipPromptGenerator:
                 ],
                 temperature=0.8,
                 max_tokens=800,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                timeout=15  # 15 second timeout for this specific call
             )
             
             # Parse the response
@@ -274,7 +288,10 @@ class ClipPromptGenerator:
                 'motion_direction': result.get('motion_direction', ''),
                 'mood': result.get('mood', '')
             }
-            
+                
+        except httpx.TimeoutException as te:
+            self._logger.warning(f"GPT-4o API call timed out after 15s, using fallback: {te}")
+            return self._fallback_prompt(product, use_case, clip_type, script_segment)
         except Exception as e:
             self._logger.error(f"GPT-4o prompt generation failed: {e}")
             return self._fallback_prompt(product, use_case, clip_type, script_segment)
