@@ -185,3 +185,178 @@ def cleanup_old_assembly_jobs(max_age_hours: int = 24):
     # This is a maintenance task that can be run periodically
     # Implementation depends on how we store job results
     pass
+
+
+@celery.task(bind=True, max_retries=3)
+def generate_clip_async(
+    self,
+    clip_id: int,
+    image_url: Optional[str] = None
+) -> Dict[str, Any]:
+    """Generate a single video clip asynchronously via Pollo.ai.
+    
+    This task handles the Pollo API call in the background,
+    avoiding the 30s Render web request timeout.
+    
+    Args:
+        self: Celery task instance
+        clip_id: ID of the VideoClip to generate
+        image_url: Optional image URL for image-to-video
+        
+    Returns:
+        Dict with result info
+    """
+    from app.services.video_clip_manager import VideoClipManager
+    from app.models import VideoClip, UseCase
+    
+    try:
+        # Update status to show we're starting
+        clip = db.session.get(VideoClip, clip_id)
+        if not clip:
+            raise ValueError(f"Clip {clip_id} not found")
+        
+        # Mark as generating
+        clip.status = 'generating'
+        db.session.commit()
+        
+        self.update_state(
+            state=states.STARTED,
+            meta={
+                'clip_id': clip_id,
+                'step': 'starting_generation',
+                'message': f'Starting video generation for clip {clip_id}'
+            }
+        )
+        
+        # Get API key and create manager
+        api_key = current_app.config.get('POLLO_API_KEY')
+        upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
+        manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
+        
+        # Start generation (this calls Pollo API)
+        result = manager.start_generation(clip_id, image_url=image_url)
+        
+        if result.get('success'):
+            self.update_state(
+                state=states.SUCCESS,
+                meta={
+                    'clip_id': clip_id,
+                    'task_id': result.get('task_id'),
+                    'step': 'queued',
+                    'message': 'Video generation started on Pollo.ai'
+                }
+            )
+            return {
+                'success': True,
+                'clip_id': clip_id,
+                'task_id': result.get('task_id'),
+                'status': 'generating'
+            }
+        else:
+            # Mark as error
+            clip.status = 'error'
+            clip.error_message = result.get('error', 'Unknown error')
+            db.session.commit()
+            
+            raise RuntimeError(result.get('error', 'Generation failed'))
+            
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception(f"Clip generation failed for clip {clip_id}")
+        
+        # Retry with exponential backoff
+        countdown = 30 * (2 ** self.request.retries)
+        raise self.retry(exc=exc, countdown=countdown)
+
+
+@celery.task(bind=True, max_retries=3)
+def generate_clips_batch_async(
+    self,
+    use_case_id: int,
+    clip_configs: list,
+    selected_image_url: Optional[str] = None
+) -> Dict[str, Any]:
+    """Generate multiple clips asynchronously.
+    
+    Args:
+        self: Celery task instance
+        use_case_id: ID of the use case
+        clip_configs: List of clip config dicts with prompt, clip_type, etc.
+        selected_image_url: Optional image URL to use for all clips
+        
+    Returns:
+        Dict with results for all clips
+    """
+    from app.services.video_clip_manager import VideoClipManager
+    from app.models import VideoClip, UseCase
+    
+    results = []
+    errors = []
+    
+    try:
+        api_key = current_app.config.get('POLLO_API_KEY')
+        upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
+        manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
+        
+        use_case = db.session.get(UseCase, use_case_id)
+        if not use_case:
+            raise ValueError(f"Use case {use_case_id} not found")
+        
+        existing_clips = VideoClip.query.filter_by(use_case_id=use_case_id).count()
+        
+        for i, config in enumerate(clip_configs):
+            clip_index = existing_clips + i
+            
+            self.update_state(
+                state='PROGRESS',
+                meta={
+                    'step': f'generating_clip_{i+1}',
+                    'progress': int((i / len(clip_configs)) * 100),
+                    'message': f'Creating clip {i+1} of {len(clip_configs)}'
+                }
+            )
+            
+            try:
+                # Create clip record
+                clip = manager.create_clip(
+                    use_case_id=use_case_id,
+                    sequence_order=clip_index,
+                    prompt=config['prompt'],
+                    length=5
+                )
+                
+                # Start generation
+                result = manager.start_generation(clip.id, image_url=selected_image_url)
+                
+                if result.get('success'):
+                    results.append({
+                        'clip_id': clip.id,
+                        'task_id': result.get('task_id'),
+                        'status': 'generating'
+                    })
+                else:
+                    errors.append({
+                        'clip_index': i,
+                        'error': result.get('error', 'Unknown error')
+                    })
+                    
+            except Exception as e:
+                current_app.logger.error(f"Failed to generate clip {i}: {e}")
+                errors.append({
+                    'clip_index': i,
+                    'error': str(e)
+                })
+        
+        return {
+            'success': len(errors) == 0 or len(results) > 0,
+            'clips': results,
+            'errors': errors if errors else None,
+            'total_requested': len(clip_configs),
+            'started': len(results),
+            'failed': len(errors)
+        }
+        
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception(f"Batch generation failed for use_case {use_case_id}")
+        raise

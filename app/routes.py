@@ -2056,120 +2056,46 @@ def generate_video_clips(use_case_id):
             scene_context=scene_context
         )
 
+        # Use Celery for async generation to avoid Render's 30s timeout
+        from app.tasks.video_tasks import generate_clips_batch_async
+        
         generated_clips = []
         errors = []
-        queued_clips = []
-
-        # Pollo.ai has rate limits - generate clips sequentially with delays
-        DELAY_BETWEEN_CLIPS = 1  # Reduced from 3s to avoid timeout
-        MAX_RETRIES = 1  # Reduced from 2 to speed up generation
-
-        # Generate requested number of clips with rate limiting
+        
+        # Prepare clip configs for the Celery task
+        clip_configs_for_task = []
         for i in range(count):
             clip_index = existing_clips + i
-
             if clip_index >= len(clips_config):
                 break
-
+            
             clip_config = clips_config[clip_index]
-            prompt = clip_config['prompt']
-            clip_type = clip_config['clip_type']
-
-            # Get the image URL for this clip - use selected product image directly
-            image_url = None
-
-            # Use selected product image URL
-            if selected_image_url:
-                if selected_image_url.startswith(('http://', 'https://')):
-                    image_url = selected_image_url
-                    current_app.logger.info(f'Using selected product image for clip {clip_index}')
-
-            # Fall back to product images if nothing selected
-            if not image_url and product.images:
-                if isinstance(product.images, list) and len(product.images) > 0:
-                    image_index = clip_index % len(product.images)
-                    image_url = product.images[image_index]
-
-            # Create clip with AI-generated prompt
-            clip = manager.create_clip(
-                use_case_id=use_case_id,
-                sequence_order=clip_index,
-                prompt=prompt,
-                length=5
-            )
-
-            # Start generation with retry logic for rate limits
-            result = None
-            retry_count = 0
-            success = False
-
-            while retry_count <= MAX_RETRIES and not success:
-                result = manager.start_generation(clip.id, image_url=image_url)
-
-                if result.get('success'):
-                    success = True
-                elif result.get('error_type') == 'rate_limit' or '429' in str(result.get('error', '')):
-                    # Rate limited - wait longer and retry
-                    retry_count += 1
-                    if retry_count <= MAX_RETRIES:
-                        wait_time = DELAY_BETWEEN_CLIPS * (2 ** retry_count)  # Exponential backoff
-                        current_app.logger.warning(f'Rate limited on clip {clip.id}, waiting {wait_time}s before retry {retry_count}')
-                        import time
-                        time.sleep(wait_time)
-                else:
-                    # Other error - don't retry
-                    break
-
-            if success:
-                generated_clips.append({
-                    'clip': clip.to_dict(),
-                    'clip_type': clip_type,
-                    'prompt_sent': prompt,
-                    'image_url_used': image_url,
-                    'status': 'started'
-                })
-            else:
-                # Check if it's a rate limit error - queue for later if so
-                if result and (result.get('error_type') == 'rate_limit' or '429' in str(result.get('error', ''))):
-                    clip.status = 'pending'  # Reset to pending so it can be retried
-                    db.session.commit()
-                    queued_clips.append({
-                        'clip_id': clip.id,
-                        'clip_type': clip_type,
-                        'prompt_sent': prompt,
-                        'status': 'queued_for_retry',
-                        'error': result.get('error')
-                    })
-                else:
-                    errors.append({
-                        'clip_index': clip_index,
-                        'clip_id': clip.id,
-                        'error': result.get('error', 'Failed to start generation') if result else 'Unknown error',
-                        'prompt_sent': prompt
-                    })
-
-            # Add delay between clips (except for the last one)
-            if i < count - 1:
-                import time
-                current_app.logger.info(f'Waiting {DELAY_BETWEEN_CLIPS}s before starting next clip ({i+1}/{count})')
-                time.sleep(DELAY_BETWEEN_CLIPS)
-
-        if generated_clips or queued_clips:
-            use_case.status = 'generating'
-            db.session.commit()
-
-            total_processing = len(generated_clips) + len(queued_clips)
-
-            return jsonify({
-                'success': True,
-                'clips': generated_clips,
-                'queued': queued_clips if queued_clips else None,
-                'count': len(generated_clips),
-                'queued_count': len(queued_clips),
-                'total_requested': count,
-                'errors': errors if errors else None,
-                'message': f'Started {len(generated_clips)} clip(s), queued {len(queued_clips)} for retry.' if queued_clips else f'Started generation of {len(generated_clips)} clip(s).'
+            clip_configs_for_task.append({
+                'prompt': clip_config['prompt'],
+                'clip_type': clip_config['clip_type'],
+                'sequence_order': clip_index
             })
+        
+        current_app.logger.info(f'Queueing {len(clip_configs_for_task)} clips for async generation via Celery')
+        
+        # Queue the batch generation task
+        task = generate_clips_batch_async.delay(
+            use_case_id=use_case_id,
+            clip_configs=clip_configs_for_task,
+            selected_image_url=selected_image_url
+        )
+        
+        # Update use case status
+        use_case.status = 'generating'
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'task_id': task.id,
+            'message': f'Queued {len(clip_configs_for_task)} clip(s) for generation. Task ID: {task.id}',
+            'count': len(clip_configs_for_task),
+            'status': 'queued'
+        })
         else:
             return jsonify({
                 'success': False,
@@ -2304,6 +2230,36 @@ def check_clip_status(clip_id):
         result = manager.check_clip_status(clip_id)
         return jsonify(result)
 
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/tasks/<task_id>/status', methods=['GET'])
+@login_required
+def check_celery_task_status(task_id):
+    """Check the status of a Celery task (for async clip generation)."""
+    from app.celery_app import celery
+    
+    try:
+        result = celery.AsyncResult(task_id)
+        
+        response = {
+            'task_id': task_id,
+            'status': result.status,
+            'ready': result.ready()
+        }
+        
+        if result.ready():
+            if result.successful():
+                response['result'] = result.result
+            else:
+                response['error'] = str(result.result)
+        elif result.info:
+            # Include progress info if available
+            response['meta'] = result.info
+            
+        return jsonify(response)
+        
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
