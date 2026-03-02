@@ -71,6 +71,7 @@ class PolloAIClient:
         
         # Sora (OpenAI) - available on Pollo.ai
         'sora-2': {'provider': 'sora', 'model': 'sora-2', 'supports_text': True, 'supports_image': True},
+        'sora-2-pro': {'provider': 'sora', 'model': 'sora-2-pro', 'supports_text': True, 'supports_image': True},
     }
     
     # Style to model recommendations - using less restrictive models
@@ -266,7 +267,7 @@ class PolloAIClient:
             provider=provider,
             model=model_name,
             aspect_ratio=aspect_ratio,
-            length=length,
+            length=input_data.get('length', length),
             resolution=resolution,
             has_image=bool(image_url),
             negative_prompt=bool(negative_prompt),
@@ -290,12 +291,27 @@ class PolloAIClient:
             # Extract task ID from response (may be in data.taskId or directly in taskId)
             task_id = result.get('taskId')
             status = result.get('status', 'waiting')
-            
+
             # Check nested data structure
             if not task_id and 'data' in result:
                 task_id = result['data'].get('taskId')
                 status = result['data'].get('status', status)
-            
+
+            # Validate that we got a task_id - without it we can't track the job
+            if not task_id:
+                self._log_error(
+                    'Pollo API returned success but no taskId',
+                    response_body=result
+                )
+                return {
+                    'success': False,
+                    'error': 'Pollo API did not return a task ID. The job may not have been created.',
+                    'task_id': None,
+                    'status': 'failed',
+                    'error_type': 'missing_task_id',
+                    'raw_response': result
+                }
+
             return {
                 'success': True,
                 'task_id': task_id,
@@ -306,12 +322,18 @@ class PolloAIClient:
         except requests.exceptions.HTTPError as e:
             # Handle specific HTTP errors with user-friendly messages
             status_code = getattr(e.response, 'status_code', None)
+            response_body = None
+            try:
+                response_body = e.response.text if e.response is not None else None
+            except Exception:
+                pass
             error_msg = self._get_user_friendly_error(e, status_code)
-            
+
             self._log_error(
                 'Pollo video job request failed',
                 status_code=status_code,
-                error=str(e)
+                error=str(e),
+                response_body=response_body
             )
             
             # Rate limits (429) should be retryable
@@ -328,8 +350,7 @@ class PolloAIClient:
                 raise NonRetryableAPIError(
                     provider="Pollo.ai",
                     message=error_msg,
-                    status_code=status_code,
-                    retryable=False
+                    status_code=status_code
                 ) from e
             
         except requests.exceptions.RequestException as e:
@@ -488,7 +509,8 @@ class PolloAIClient:
             input_data = {
                 'prompt': prompt,
                 'aspectRatio': aspect_ratio,
-                'length': length
+                'length': 4,
+                'resolution': resolution
             }
             if image_url:
                 input_data['image'] = image_url
