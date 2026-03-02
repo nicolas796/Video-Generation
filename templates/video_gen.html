@@ -903,8 +903,8 @@ async function loadClips() {
                 showClips(clips);
             }
             
-            // Auto-refresh if any clips are generating
-            const hasGenerating = clips.some(c => c.status === 'generating');
+            // Auto-refresh if any clips are generating or pending (worker still starting)
+            const hasGenerating = clips.some(c => c.status === 'generating' || c.status === 'pending');
             if (hasGenerating && !statusInterval) {
                 pollingStartTime = Date.now();
                 statusInterval = setInterval(loadClips, 5000);
@@ -984,7 +984,7 @@ function showClips(clips) {
     
     // Update UI states
     const allComplete = clips.every(c => c.status === 'complete');
-    const hasGenerating = clips.some(c => c.status === 'generating');
+    const hasGenerating = clips.some(c => c.status === 'generating' || c.status === 'pending');
     
     if (allComplete && clips.length > 0) {
         document.getElementById('generateSection').classList.add('d-none');
@@ -1111,9 +1111,10 @@ function updateStats(stats) {
     
     if (stats.is_complete) {
         document.getElementById('generatingStatus').textContent = 'All clips complete!';
-    } else if (stats.generating > 0) {
-        document.getElementById('generatingStatus').textContent = 
-            `${stats.generating} clip${stats.generating > 1 ? 's' : ''} processing (2-3 min each)...`;
+    } else if (stats.generating > 0 || stats.pending > 0) {
+        const inProgress = (stats.generating || 0) + (stats.pending || 0);
+        document.getElementById('generatingStatus').textContent =
+            `${inProgress} clip${inProgress > 1 ? 's' : ''} processing (2-3 min each)...`;
     }
 }
 
