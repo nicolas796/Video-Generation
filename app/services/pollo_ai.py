@@ -71,6 +71,7 @@ class PolloAIClient:
         
         # Sora (OpenAI) - available on Pollo.ai
         'sora-2': {'provider': 'sora', 'model': 'sora-2', 'supports_text': True, 'supports_image': True},
+        'sora-2-pro': {'provider': 'sora', 'model': 'sora-2-pro', 'supports_text': True, 'supports_image': True},
     }
     
     # Style to model recommendations - using less restrictive models
@@ -321,12 +322,18 @@ class PolloAIClient:
         except requests.exceptions.HTTPError as e:
             # Handle specific HTTP errors with user-friendly messages
             status_code = getattr(e.response, 'status_code', None)
+            response_body = None
+            try:
+                response_body = e.response.text if e.response is not None else None
+            except Exception:
+                pass
             error_msg = self._get_user_friendly_error(e, status_code)
-            
+
             self._log_error(
                 'Pollo video job request failed',
                 status_code=status_code,
-                error=str(e)
+                error=str(e),
+                response_body=response_body
             )
             
             # Rate limits (429) should be retryable
@@ -502,7 +509,8 @@ class PolloAIClient:
             input_data = {
                 'prompt': prompt,
                 'aspectRatio': aspect_ratio,
-                'length': length
+                'length': 4,
+                'resolution': resolution
             }
             if image_url:
                 input_data['image'] = image_url
