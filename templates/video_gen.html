@@ -421,6 +421,9 @@
                         <div class="stat-item">
                             <div class="stat-number text-danger" id="statError">0</div>
                             <div class="stat-label">Errors</div>
+                            <button class="btn btn-warning btn-sm mt-1 d-none" id="retryAllBtn" onclick="retryAllFailed()">
+                                <i class="bi bi-arrow-repeat"></i> Retry All
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1017,11 +1020,13 @@ function renderClipCard(clip) {
             </div>
         `;
     } else if (clip.status === 'error') {
+        const errorMsg = clip.error_message ? `<p class="small mb-0 text-warning mt-1" style="font-size:0.7rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(clip.error_message || '').replace(/"/g, '&quot;')}">${clip.error_message}</p>` : '';
         thumbnailContent = `
             <div class="d-flex align-items-center justify-content-center h-100 text-white">
                 <div class="text-center">
                     <i class="bi bi-exclamation-circle fs-1 mb-2"></i>
                     <p class="small mb-0">Error</p>
+                    ${errorMsg}
                 </div>
             </div>
         `;
@@ -1058,7 +1063,11 @@ function renderClipCard(clip) {
                         <button class="btn btn-success btn-sm" onclick="addClipToLibrary(${clip.id})" title="Add to Library">
                             <i class="bi bi-collection-play"></i>
                         </button>
-                        ` : ''}
+                        ` : `
+                        <button class="btn btn-warning btn-sm" onclick="retryClip(${clip.id})" title="Retry">
+                            <i class="bi bi-arrow-repeat"></i>
+                        </button>
+                        `}
                         <button class="btn btn-outline-danger btn-sm" onclick="openDeleteModal(${clip.id})">
                             <i class="bi bi-trash"></i>
                         </button>
@@ -1089,7 +1098,14 @@ function updateStats(stats) {
     document.getElementById('statComplete').textContent = stats.complete;
     document.getElementById('statGenerating').textContent = stats.generating;
     document.getElementById('statError').textContent = stats.error;
-    
+
+    const retryBtn = document.getElementById('retryAllBtn');
+    if (stats.error > 0) {
+        retryBtn.classList.remove('d-none');
+    } else {
+        retryBtn.classList.add('d-none');
+    }
+
     document.getElementById('progressText').textContent = stats.progress_percentage + '%';
     document.getElementById('progressBar').style.width = stats.progress_percentage + '%';
     
@@ -1501,6 +1517,55 @@ function playVideo(clipId) {
             video.pause();
             video.src = '';
         }, { once: true });
+    }
+}
+
+async function retryAllFailed() {
+    if (!confirm('Retry all failed clips?')) return;
+    try {
+        const response = await fetch(`/api/use-cases/{{ use_case.id }}/retry-failed-clips`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' }
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            showToast(`Retrying ${data.retried ? data.retried.length : 0} failed clips`, 'success');
+            loadClips();
+            if (!statusInterval) {
+                pollingStartTime = Date.now();
+                statusInterval = setInterval(loadClips, 5000);
+            }
+        } else {
+            alert('Error retrying clips: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to retry clips. Please try again.');
+    }
+}
+
+async function retryClip(clipId) {
+    if (!confirm('Retry this failed clip?')) return;
+    try {
+        const response = await fetch(`/api/clips/${clipId}/regenerate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+            body: JSON.stringify({})
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            showToast('Clip retry started', 'success');
+            loadClips();
+            if (!statusInterval) {
+                pollingStartTime = Date.now();
+                statusInterval = setInterval(loadClips, 5000);
+            }
+        } else {
+            alert('Error retrying clip: ' + (data.error || 'Unknown error'));
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to retry clip. Please try again.');
     }
 }
 
