@@ -620,10 +620,22 @@ class VideoClipManager:
                                      clip_id=clip.id,
                                      aspect_ratio=aspect_ratio)
             
-            if result.get('success'):
+            if result.get('success') and result.get('task_id'):
                 clip.pollo_job_id = result['task_id']
                 db.session.commit()
                 return result
+            elif result.get('success') and not result.get('task_id'):
+                # API returned success but no task_id - treat as error
+                error_msg = 'Pollo API succeeded but did not return a task ID'
+                self._log_error(error_msg, clip_id=clip.id, raw_response=result.get('raw_response'))
+                clip.status = 'error'
+                clip.error_message = error_msg
+                db.session.commit()
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'error_type': 'missing_task_id'
+                }
             else:
                 # Handle error from create_video_job
                 error_msg = result.get('error', 'Unknown error from Pollo.ai')
@@ -829,11 +841,13 @@ class VideoClipManager:
                     if sync_result.get('dirty'):
                         dirty = True
                 else:
-                    # No pollo_job_id but clip is generating/pending - mark as error
+                    # No pollo_job_id but clip is generating/pending
+                    # Reset to pending so the user can retry via "Generate More"
                     if clip.status in ('generating', 'pending'):
-                        self._log_error('Clip has no Pollo job ID', clip_id=clip.id)
+                        self._log_warning('Clip has no Pollo job ID - resetting to error for retry',
+                                         clip_id=clip.id)
                         clip.status = 'error'
-                        clip.error_message = 'No generation job found (may have been lost)'
+                        clip.error_message = 'Generation job was not created. Click retry to try again.'
                         dirty = True
                         status_map[clip.id] = {
                             'success': False,
