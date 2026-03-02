@@ -7,7 +7,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from flask import current_app
 
 from app import db
-from app.models import UseCase, Script
+from app.models import UseCase, Script, VideoClip
 from app.celery_app import celery
 
 
@@ -80,6 +80,61 @@ def assemble_final_video_async(
         
         if script.status != 'approved':
             raise ValueError("Script must be approved before assembly")
+        
+        # Download any clips that have Pollo URLs but no local file
+        self.update_state(
+            state=states.STARTED,
+            meta={
+                'step': 'downloading_clips',
+                'progress': 8,
+                'message': 'Downloading video clips...'
+            }
+        )
+        
+        from app.utils.clip_assets import download_clip_assets
+        
+        # Get all ready clips that need downloading
+        ready_clips = VideoClip.query.filter_by(
+            use_case_id=use_case_id,
+            status='ready'
+        ).all()
+        
+        downloaded_count = 0
+        for clip in ready_clips:
+            if clip.pollo_video_url and not clip.file_path:
+                try:
+                    current_app.logger.info(
+                        "Downloading clip in worker",
+                        extra={
+                            'clip_id': clip.id,
+                            'use_case_id': use_case_id,
+                            'pollo_video_url': clip.pollo_video_url[:100]
+                        }
+                    )
+                    assets = download_clip_assets(
+                        clip=clip,
+                        video_url=clip.pollo_video_url,
+                        upload_root=upload_folder,
+                        logger=current_app.logger
+                    )
+                    clip.file_path = assets['video']
+                    clip.thumbnail_path = assets['thumbnail']
+                    clip.status = 'complete'
+                    downloaded_count += 1
+                except Exception as e:
+                    current_app.logger.error(
+                        "Failed to download clip",
+                        extra={'clip_id': clip.id, 'error': str(e)}
+                    )
+                    clip.status = 'error'
+                    clip.error_message = f"Download failed: {str(e)}"
+        
+        if downloaded_count > 0:
+            db.session.commit()
+            current_app.logger.info(
+                "Downloaded clips in worker",
+                extra={'count': downloaded_count, 'use_case_id': use_case_id}
+            )
         
         # Check for voiceover
         self.update_state(

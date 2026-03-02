@@ -24,7 +24,8 @@ from app.services.video_assembly import VideoAssembler
 from app.services.smart_assembly import SmartVideoAssembler
 from app.services.pipeline_progress import PipelineProgressTracker, PipelineRecoveryService
 
-import cv2
+from app.utils.clip_assets import download_clip_assets
+
 
 main_bp = Blueprint('main', __name__)
 
@@ -166,61 +167,6 @@ def _verify_pollo_signature(secret: str, provided_signature: Optional[str], raw_
     provided = provided_signature.split('=', 1)[-1].strip()
     return hmac.compare_digest(digest, provided)
 
-
-def _download_clip_assets(clip: VideoClip, video_url: str) -> Dict[str, Optional[str]]:
-    """Download a Pollo-generated clip and create a thumbnail.
-
-    Returns a dictionary with relative video/thumbnail paths (relative to UPLOAD_FOLDER).
-    Raises any download or file errors to the caller.
-    """
-    upload_root = os.path.abspath(current_app.config.get('UPLOAD_FOLDER', './uploads'))
-    use_case_str = str(clip.use_case_id)
-    clip_folder = os.path.join(upload_root, 'clips', use_case_str)
-    os.makedirs(clip_folder, exist_ok=True)
-    # Use consistent filename format matching video_clip_manager.py
-    video_filename = f"clip_{clip.id:03d}_{clip.sequence_order:02d}.mp4"
-    video_path = os.path.join(clip_folder, video_filename)
-    response = requests.get(video_url, stream=True, timeout=120)
-    response.raise_for_status()
-    with open(video_path, 'wb') as video_file:
-        for chunk in response.iter_content(chunk_size=8192):
-            if chunk:
-                video_file.write(chunk)
-    video_rel_path = os.path.relpath(video_path, upload_root)
-    thumb_rel_path = _generate_clip_thumbnail(video_path, clip.use_case_id, clip.id, upload_root)
-    return {
-        'video': video_rel_path,
-        'thumbnail': thumb_rel_path
-    }
-
-
-def _generate_clip_thumbnail(video_path: str, use_case_id: int, clip_id: int, upload_root: str) -> Optional[str]:
-    """Generate a thumbnail image for a downloaded clip."""
-    try:
-        cap = cv2.VideoCapture(video_path)
-    except Exception:
-        return None
-    if not cap.isOpened():
-        cap.release()
-        return None
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    if total_frames > 0:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, max(total_frames // 2, 0))
-    ret, frame = cap.read()
-    cap.release()
-    if not ret or frame is None:
-        return None
-    thumb_folder = os.path.join(upload_root, 'clips', str(use_case_id), 'thumbnails')
-    os.makedirs(thumb_folder, exist_ok=True)
-    thumb_filename = f"clip_{clip_id:03d}_thumb.jpg"
-    thumb_path = os.path.join(thumb_folder, thumb_filename)
-    height, width = frame.shape[:2]
-    max_width = 480
-    if width > max_width and width > 0:
-        ratio = max_width / float(width)
-        frame = cv2.resize(frame, (max_width, int(height * ratio)), interpolation=cv2.INTER_AREA)
-    cv2.imwrite(thumb_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-    return os.path.relpath(thumb_path, upload_root)
 
 
 @main_bp.route('/')
@@ -3112,18 +3058,21 @@ def pollo_webhook():
         if status in ('completed', 'succeeded', 'success', 'done'):
             video_url = _extract_pollo_video_url(payload)
             if video_url:
-                try:
-                    assets = _download_clip_assets(clip, video_url)
-                    clip.status = 'complete'
-                    clip.file_path = assets['video']
-                    clip.completed_at = datetime.utcnow()
-                    clip.error_message = None
-                    if assets.get('thumbnail'):
-                        clip.thumbnail_path = assets['thumbnail']
-                except Exception as download_error:
-                    current_app.logger.exception('Failed to download Pollo clip %s', clip.id)
-                    clip.status = 'error'
-                    clip.error_message = f'Download failed: {download_error}'
+                clip.pollo_video_url = video_url
+                clip.status = 'ready'
+                clip.completed_at = datetime.utcnow()
+                clip.error_message = None
+                # Clear stale file references so the worker can redownload
+                clip.file_path = None
+                clip.thumbnail_path = None
+                current_app.logger.info(
+                    'Clip marked ready from webhook',
+                    extra={
+                        'clip_id': clip.id,
+                        'use_case_id': clip.use_case_id,
+                        'pollo_job_id': clip.pollo_job_id
+                    }
+                )
             else:
                 clip.status = 'error'
                 clip.error_message = 'No video URL in completed payload'

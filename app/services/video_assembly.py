@@ -69,6 +69,13 @@ class VideoAssembler:
             status="complete"
         ).order_by(VideoClip.sequence_order).all()
 
+        # Also include ready clips (generated but not yet downloaded)
+        ready_clips = VideoClip.query.filter_by(
+            use_case_id=use_case.id,
+            status="ready"
+        ).order_by(VideoClip.sequence_order).all()
+        clips = clips + ready_clips
+
         if not clips:
             return {"success": False, "error": "No complete clips available for assembly"}
 

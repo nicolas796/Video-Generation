@@ -35,10 +35,10 @@ class SmartVideoAssembler(VideoAssembler):
         Instead of using all clips, the AI analyzes and selects the best segments
         to fit the target duration while maintaining narrative flow.
         """
-        # Get all complete clips
-        clips = VideoClip.query.filter_by(
-            use_case_id=use_case.id,
-            status="complete"
+        # Get all complete or ready clips
+        clips = VideoClip.query.filter(
+            VideoClip.use_case_id == use_case.id,
+            VideoClip.status.in_(["complete", "ready"])
         ).order_by(VideoClip.sequence_order).all()
 
         if not clips:
