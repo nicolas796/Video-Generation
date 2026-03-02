@@ -2056,46 +2056,121 @@ def generate_video_clips(use_case_id):
             scene_context=scene_context
         )
 
-        # Use Celery for async generation to avoid Render's 30s timeout
+        # Try Celery first, fallback to synchronous if not available
         from app.tasks.video_tasks import generate_clips_batch_async
+        from app.celery_app import celery
         
         generated_clips = []
         errors = []
         
-        # Prepare clip configs for the Celery task
-        clip_configs_for_task = []
-        for i in range(count):
-            clip_index = existing_clips + i
-            if clip_index >= len(clips_config):
-                break
+        # Check if Celery worker is available
+        try:
+            # Quick check - ping the broker
+            celery.connection().connect()
+            celery_available = True
+        except Exception as e:
+            current_app.logger.warning(f'Celery not available: {e}')
+            celery_available = False
+        
+        if celery_available:
+            # Use async generation via Celery
+            clip_configs_for_task = []
+            for i in range(count):
+                clip_index = existing_clips + i
+                if clip_index >= len(clips_config):
+                    break
+                
+                clip_config = clips_config[clip_index]
+                clip_configs_for_task.append({
+                    'prompt': clip_config['prompt'],
+                    'clip_type': clip_config['clip_type'],
+                    'sequence_order': clip_index
+                })
             
-            clip_config = clips_config[clip_index]
-            clip_configs_for_task.append({
-                'prompt': clip_config['prompt'],
-                'clip_type': clip_config['clip_type'],
-                'sequence_order': clip_index
+            current_app.logger.info(f'Queueing {len(clip_configs_for_task)} clips for async generation via Celery')
+            
+            # Queue the batch generation task
+            task = generate_clips_batch_async.delay(
+                use_case_id=use_case_id,
+                clip_configs=clip_configs_for_task,
+                selected_image_url=selected_image_url
+            )
+            
+            # Update use case status
+            use_case.status = 'generating'
+            db.session.commit()
+            
+            return jsonify({
+                'success': True,
+                'task_id': task.id,
+                'message': f'Queued {len(clip_configs_for_task)} clip(s) for generation. Task ID: {task.id}',
+                'count': len(clip_configs_for_task),
+                'status': 'queued'
             })
-        
-        current_app.logger.info(f'Queueing {len(clip_configs_for_task)} clips for async generation via Celery')
-        
-        # Queue the batch generation task
-        task = generate_clips_batch_async.delay(
-            use_case_id=use_case_id,
-            clip_configs=clip_configs_for_task,
-            selected_image_url=selected_image_url
-        )
-        
-        # Update use case status
-        use_case.status = 'generating'
-        db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'task_id': task.id,
-            'message': f'Queued {len(clip_configs_for_task)} clip(s) for generation. Task ID: {task.id}',
-            'count': len(clip_configs_for_task),
-            'status': 'queued'
-        })
+        else:
+            # Fallback: synchronous generation (may timeout on Render)
+            current_app.logger.warning('Celery not available, falling back to synchronous generation')
+            
+            # Generate clips synchronously (limited to 1 clip to avoid timeout)
+            max_sync_clips = 1
+            actual_count = min(count, max_sync_clips)
+            
+            for i in range(actual_count):
+                clip_index = existing_clips + i
+                if clip_index >= len(clips_config):
+                    break
+                
+                clip_config = clips_config[clip_index]
+                prompt = clip_config['prompt']
+                clip_type = clip_config['clip_type']
+                
+                # Get image URL
+                image_url = selected_image_url
+                if not image_url and product.images:
+                    if isinstance(product.images, list) and len(product.images) > 0:
+                        image_index = clip_index % len(product.images)
+                        image_url = product.images[image_index]
+                
+                # Create and start generation
+                clip = manager.create_clip(
+                    use_case_id=use_case_id,
+                    sequence_order=clip_index,
+                    prompt=prompt,
+                    length=5
+                )
+                
+                result = manager.start_generation(clip.id, image_url=image_url)
+                
+                if result.get('success'):
+                    generated_clips.append({
+                        'clip': clip.to_dict(),
+                        'clip_type': clip_type,
+                        'status': 'started'
+                    })
+                else:
+                    errors.append({
+                        'clip_index': clip_index,
+                        'error': result.get('error', 'Failed to start generation')
+                    })
+            
+            if generated_clips:
+                use_case.status = 'generating'
+                db.session.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'clips': generated_clips,
+                    'count': len(generated_clips),
+                    'errors': errors if errors else None,
+                    'message': f'Started {len(generated_clips)} clip(s) synchronously (Celery unavailable).',
+                    'celery_warning': 'Background worker not running - generation may be slower'
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'error': 'Failed to start clip generation',
+                    'errors': errors
+                }), 500
 
     except Exception as e:
         import traceback
