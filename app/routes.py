@@ -3072,7 +3072,7 @@ def pollo_webhook():
 
         # Log full details for debugging
         current_app.logger.info('Webhook received: id=%s timestamp=%s signature=%s body=%s',
-                                webhook_id, webhook_timestamp, signature, raw_body.decode('utf-8')[:200] if raw_body else None)
+                                webhook_id, webhook_timestamp, signature, raw_body.decode('utf-8')[:1000] if raw_body else None)
 
         # TEMPORARILY DISABLED: Signature verification needs debugging
         # if secret and signature:
@@ -3081,11 +3081,26 @@ def pollo_webhook():
         #         return jsonify({'error': 'Invalid signature'}), 401
 
         # Extract task ID and status from payload
-        task_id = payload.get('taskId') or payload.get('task_id') or _extract_nested_value(payload, 'data.taskId')
+        # Pollo may send taskId in various locations depending on the callback type
+        task_id = (
+            payload.get('taskId')
+            or payload.get('task_id')
+            or payload.get('id')
+            or _extract_nested_value(payload, 'data.taskId')
+            or _extract_nested_value(payload, 'data.task_id')
+            or _extract_nested_value(payload, 'data.id')
+            or _extract_nested_value(payload, 'result.taskId')
+            or _extract_nested_value(payload, 'result.id')
+        )
         status = _extract_pollo_status(payload)
 
         if not task_id:
-            return jsonify({'error': 'No task ID in payload'}), 400
+            current_app.logger.error(
+                'Webhook rejected: no task ID found in payload. Keys: %s, Body: %s',
+                list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__,
+                raw_body.decode('utf-8')[:500] if raw_body else None
+            )
+            return jsonify({'error': 'No task ID in payload', 'received_keys': list(payload.keys()) if isinstance(payload, dict) else []}), 400
 
         # Find the clip by task ID
         clip = VideoClip.query.filter_by(pollo_job_id=task_id).first()
