@@ -343,8 +343,7 @@ class PolloAIClient:
                 raise NonRetryableAPIError(
                     provider="Pollo.ai",
                     message=error_msg,
-                    status_code=status_code,
-                    retryable=False
+                    status_code=status_code
                 ) from e
             
         except requests.exceptions.RequestException as e:
