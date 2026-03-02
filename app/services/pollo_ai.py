@@ -509,7 +509,7 @@ class PolloAIClient:
             input_data = {
                 'prompt': prompt,
                 'aspectRatio': aspect_ratio,
-                'length': length,
+                'length': 4,
                 'resolution': resolution
             }
             if image_url:
