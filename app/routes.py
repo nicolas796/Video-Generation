@@ -2894,7 +2894,8 @@ def assemble_final_video(use_case_id):
             task = assemble_final_video_async.delay(
                 use_case_id=use_case_id,
                 script_id=script.id,
-                options=options
+                options=options,
+                upload_root=upload_folder
             )
 
             current_app.logger.info(

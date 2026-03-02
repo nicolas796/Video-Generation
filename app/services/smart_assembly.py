@@ -56,12 +56,30 @@ class SmartVideoAssembler(VideoAssembler):
             strategy = "select_and_trim"
             selected_clips = self._intelligent_clip_selection(clips, target)
         
-        # Ensure each selected clip has a downloaded file
-        missing = [clip.id for clip in selected_clips if not clip.file_path]
+        # Ensure each selected clip has a downloaded file that actually exists
+        missing = []
+        missing_with_paths = []
+        for clip in selected_clips:
+            if not clip.file_path:
+                missing.append(clip.id)
+            else:
+                clip_path = self._resolve_path(clip.file_path)
+                if not os.path.exists(clip_path):
+                    missing.append(clip.id)
+                    missing_with_paths.append({
+                        'clip_id': clip.id,
+                        'file_path': clip.file_path,
+                        'resolved_path': clip_path,
+                        'pollo_job_id': clip.pollo_job_id
+                    })
+        
         if missing:
+            error_msg = f"Selected clips missing files: {missing}"
+            if missing_with_paths:
+                error_msg += f". Files not found at resolved paths: {missing_with_paths}"
             return {
                 "success": False,
-                "error": f"Selected clips missing files: {missing}"
+                "error": error_msg
             }
 
         audio_path = None

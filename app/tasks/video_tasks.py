@@ -16,7 +16,8 @@ def assemble_final_video_async(
     self,
     use_case_id: int,
     script_id: int,
-    options: Optional[Dict[str, Any]] = None
+    options: Optional[Dict[str, Any]] = None,
+    upload_root: Optional[str] = None
 ) -> Dict[str, Any]:
     """Assemble final video in the background.
     
@@ -35,6 +36,9 @@ def assemble_final_video_async(
             - background_music: str (optional)
             - transition_duration: float
             - format_override: str (optional)
+        upload_root: Absolute path to the uploads directory determined by the web
+            request. Passing this prevents Celery from falling back to a different
+            default when running in a separate container.
     
     Returns:
         Dict with result info
@@ -43,8 +47,18 @@ def assemble_final_video_async(
     from app.services.voiceover import VoiceoverGenerator
     
     options = options or {}
-    upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
+    configured_upload = upload_root or current_app.config.get('UPLOAD_FOLDER', './uploads')
+    upload_folder = os.path.abspath(configured_upload)
     ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
+
+    if upload_root and upload_root != current_app.config.get('UPLOAD_FOLDER'):
+        current_app.logger.info(
+            "Celery task using explicit upload_root",
+            extra={
+                'provided_upload_root': upload_root,
+                'app_upload_folder': current_app.config.get('UPLOAD_FOLDER')
+            }
+        )
     
     try:
         # Update status to STARTED

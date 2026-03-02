@@ -72,12 +72,29 @@ class VideoAssembler:
         if not clips:
             return {"success": False, "error": "No complete clips available for assembly"}
 
-        # Ensure each clip has a downloaded file
-        missing = [clip.id for clip in clips if not clip.file_path]
+        # Ensure each clip has a downloaded file that actually exists
+        missing = []
+        missing_with_paths = []
+        for clip in clips:
+            if not clip.file_path:
+                missing.append(clip.id)
+            else:
+                clip_path = self._resolve_path(clip.file_path)
+                if not os.path.exists(clip_path):
+                    missing.append(clip.id)
+                    missing_with_paths.append({
+                        'clip_id': clip.id,
+                        'file_path': clip.file_path,
+                        'resolved_path': clip_path
+                    })
+        
         if missing:
+            error_msg = f"Clips missing files: {missing}"
+            if missing_with_paths:
+                error_msg += f". Files not found at resolved paths: {missing_with_paths}"
             return {
                 "success": False,
-                "error": f"Clips missing files: {missing}"
+                "error": error_msg
             }
 
         audio_path = None
