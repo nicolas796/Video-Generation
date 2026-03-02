@@ -290,12 +290,27 @@ class PolloAIClient:
             # Extract task ID from response (may be in data.taskId or directly in taskId)
             task_id = result.get('taskId')
             status = result.get('status', 'waiting')
-            
+
             # Check nested data structure
             if not task_id and 'data' in result:
                 task_id = result['data'].get('taskId')
                 status = result['data'].get('status', status)
-            
+
+            # Validate that we got a task_id - without it we can't track the job
+            if not task_id:
+                self._log_error(
+                    'Pollo API returned success but no taskId',
+                    response_body=result
+                )
+                return {
+                    'success': False,
+                    'error': 'Pollo API did not return a task ID. The job may not have been created.',
+                    'task_id': None,
+                    'status': 'failed',
+                    'error_type': 'missing_task_id',
+                    'raw_response': result
+                }
+
             return {
                 'success': True,
                 'task_id': task_id,
