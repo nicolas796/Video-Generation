@@ -83,6 +83,7 @@ class VideoClipManager:
                 os.getenv('APP_BASE_URL')
                 or os.getenv('PUBLIC_BASE_URL')
                 or os.getenv('EXTERNAL_BASE_URL')
+                or os.getenv('RENDER_EXTERNAL_URL')
             )
         
         if not base_url:
@@ -123,6 +124,7 @@ class VideoClipManager:
                 os.getenv('EXTERNAL_BASE_URL')
                 or os.getenv('APP_BASE_URL')
                 or os.getenv('PUBLIC_BASE_URL')
+                or os.getenv('RENDER_EXTERNAL_URL')
             )
 
         if not base_url:
