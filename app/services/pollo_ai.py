@@ -267,7 +267,7 @@ class PolloAIClient:
             provider=provider,
             model=model_name,
             aspect_ratio=aspect_ratio,
-            length=length,
+            length=input_data.get('length', length),
             resolution=resolution,
             has_image=bool(image_url),
             negative_prompt=bool(negative_prompt),
