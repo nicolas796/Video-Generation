@@ -370,6 +370,7 @@ class VideoClip(db.Model):
             'analysis_metadata': self.analysis_metadata,
             'content_type': self.infer_content_type(),
             'status': self.status,
+            'error_message': self.error_message,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None
         }
