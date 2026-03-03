@@ -83,7 +83,7 @@ services:
     plan: standard
     
     buildCommand: "./build.sh"
-    startCommand: "celery -A app.celery_app.celery worker --loglevel=info --concurrency=1"
+    startCommand: "celery -A app.celery_app.celery worker --loglevel=info --concurrency=1 --pool=solo"
     
     envVars:
       - key: PYTHON_VERSION

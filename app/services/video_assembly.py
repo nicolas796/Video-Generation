@@ -275,6 +275,7 @@ class VideoAssembler:
             "-r", "30",
             "-an",
             "-c:v", "libx264",
+            "-threads", "1",
             "-preset", "fast",
             "-crf", "20",
             normalized
@@ -283,18 +284,22 @@ class VideoAssembler:
 
     def _concat_with_cuts(self, clips: List[str], tmp_dir: str, quality: Dict[str, str]) -> str:
         output = os.path.join(tmp_dir, "concat_cut.mp4")
-        cmd = [self.ffmpeg_path, "-y"]
-        for clip in clips:
-            cmd.extend(["-i", clip])
-        concat_filter = "".join([f"[{i}:v]" for i in range(len(clips))]) + f"concat=n={len(clips)}:v=1:a=0[outv]"
-        cmd.extend([
-            "-filter_complex", concat_filter,
-            "-map", "[outv]",
+        # Use concat demuxer (file-based) instead of filter_complex to avoid
+        # decoding all clips simultaneously, which saves significant memory.
+        list_path = os.path.join(tmp_dir, "concat_list.txt")
+        with open(list_path, "w") as f:
+            for clip in clips:
+                f.write(f"file '{clip}'\n")
+        cmd = [
+            self.ffmpeg_path, "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", list_path,
             "-c:v", "libx264",
+            "-threads", "1",
             "-preset", quality["preset"],
             "-crf", str(quality["crf"]),
             output
-        ])
+        ]
         self._run_ffmpeg(cmd)
         return output
 
@@ -326,6 +331,7 @@ class VideoAssembler:
                 "-filter_complex", filter_complex,
                 "-map", "[vout]",
                 "-c:v", "libx264",
+                "-threads", "1",
                 "-preset", quality["preset"],
                 "-crf", str(quality["crf"]),
                 output
@@ -391,9 +397,9 @@ class VideoAssembler:
         """Run ffmpeg command with proper error handling."""
         try:
             result = subprocess.run(
-                cmd, 
-                check=True, 
-                stdout=subprocess.PIPE, 
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True
             )
