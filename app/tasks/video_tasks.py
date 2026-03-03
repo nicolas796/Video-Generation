@@ -45,6 +45,7 @@ def assemble_final_video_async(
     options = options or {}
     upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
     ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
+    current_app.logger.info('Assembly task upload_folder=%s, exists=%s', upload_folder, os.path.exists(upload_folder))
     
     try:
         # Update status to STARTED

@@ -335,7 +335,14 @@ class VideoAssembler:
     def _resolve_path(self, maybe_relative: str) -> str:
         if os.path.isabs(maybe_relative):
             return maybe_relative
-        return os.path.join(self.upload_folder, maybe_relative)
+        resolved = os.path.join(self.upload_folder, maybe_relative)
+        # Guard against doubled 'uploads/' segments (e.g. /var/data/uploads/uploads/clips/...)
+        doubled = os.path.join(self.upload_folder, 'uploads')
+        if resolved.startswith(doubled + os.sep):
+            fixed = os.path.join(self.upload_folder, resolved[len(doubled) + 1:])
+            if os.path.exists(fixed):
+                return fixed
+        return resolved
 
     def _probe_duration(self, media_path: str) -> Optional[float]:
         try:
