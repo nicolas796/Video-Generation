@@ -151,6 +151,14 @@ class SmartVideoAssembler(VideoAssembler):
                     quality_preset
                 )
 
+            # Free memory: delete intermediate normalized clips now that concat is done
+            for p in processed:
+                if p != stitched_path and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
             # Match pacing to voiceover (if audio exists)
             audio_duration = self._probe_duration(audio_path) if audio_path else None
             video_duration = self._probe_duration(stitched_path)
@@ -169,11 +177,17 @@ class SmartVideoAssembler(VideoAssembler):
                         "-r", "30",
                         "-c:v", "libx264",
                         "-threads", "1",
-                        "-preset", quality_preset["preset"],
+                        "-preset", "ultrafast",
                         "-crf", str(quality_preset["crf"]),
                         paced_path
                     ])
                     video_duration = audio_duration
+                    # Free stitched file now that pacing is done
+                    if os.path.exists(stitched_path):
+                        try:
+                            os.remove(stitched_path)
+                        except OSError:
+                            pass
 
             # Overlay audio and finalize (or just finalize without audio)
             use_case_folder = os.path.join(self.final_folder, str(use_case.id))
@@ -183,16 +197,13 @@ class SmartVideoAssembler(VideoAssembler):
             final_path = os.path.join(use_case_folder, final_filename)
 
             if audio_path:
-                # With voiceover audio
+                # With voiceover audio — copy video stream, only encode audio
                 self._run_ffmpeg([
                     self.ffmpeg_path,
                     "-y",
                     "-i", paced_path,
                     "-i", audio_path,
-                    "-c:v", "libx264",
-                    "-threads", "1",
-                    "-preset", quality_preset["preset"],
-                    "-crf", str(quality_preset["crf"]),
+                    "-c:v", "copy",
                     "-c:a", "aac",
                     "-b:a", "192k",
                     "-shortest",
@@ -200,16 +211,13 @@ class SmartVideoAssembler(VideoAssembler):
                     final_path
                 ])
             else:
-                # Video only (no voiceover)
+                # Video only — just copy stream and add faststart
                 self._run_ffmpeg([
                     self.ffmpeg_path,
                     "-y",
                     "-i", paced_path,
-                    "-c:v", "libx264",
-                    "-threads", "1",
-                    "-preset", quality_preset["preset"],
-                    "-crf", str(quality_preset["crf"]),
-                    "-an",  # No audio
+                    "-c:v", "copy",
+                    "-an",
                     "-movflags", "+faststart",
                     final_path
                 ])

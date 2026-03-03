@@ -284,8 +284,9 @@ class VideoAssembler:
 
     def _concat_with_cuts(self, clips: List[str], tmp_dir: str, quality: Dict[str, str]) -> str:
         output = os.path.join(tmp_dir, "concat_cut.mp4")
-        # Use concat demuxer (file-based) instead of filter_complex to avoid
-        # decoding all clips simultaneously, which saves significant memory.
+        # Use concat demuxer with stream copy — clips are already normalized to
+        # the same resolution/codec/framerate, so no re-encoding needed.
+        # This uses almost zero memory compared to filter_complex or re-encode.
         list_path = os.path.join(tmp_dir, "concat_list.txt")
         with open(list_path, "w") as f:
             for clip in clips:
@@ -294,10 +295,7 @@ class VideoAssembler:
             self.ffmpeg_path, "-y",
             "-f", "concat", "-safe", "0",
             "-i", list_path,
-            "-c:v", "libx264",
-            "-threads", "1",
-            "-preset", quality["preset"],
-            "-crf", str(quality["crf"]),
+            "-c", "copy",
             output
         ]
         self._run_ffmpeg(cmd)
