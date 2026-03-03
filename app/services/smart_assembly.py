@@ -168,6 +168,7 @@ class SmartVideoAssembler(VideoAssembler):
                         "-an",
                         "-r", "30",
                         "-c:v", "libx264",
+                        "-threads", "1",
                         "-preset", quality_preset["preset"],
                         "-crf", str(quality_preset["crf"]),
                         paced_path
@@ -189,6 +190,7 @@ class SmartVideoAssembler(VideoAssembler):
                     "-i", paced_path,
                     "-i", audio_path,
                     "-c:v", "libx264",
+                    "-threads", "1",
                     "-preset", quality_preset["preset"],
                     "-crf", str(quality_preset["crf"]),
                     "-c:a", "aac",
@@ -204,6 +206,7 @@ class SmartVideoAssembler(VideoAssembler):
                     "-y",
                     "-i", paced_path,
                     "-c:v", "libx264",
+                    "-threads", "1",
                     "-preset", quality_preset["preset"],
                     "-crf", str(quality_preset["crf"]),
                     "-an",  # No audio
@@ -416,6 +419,7 @@ class SmartVideoAssembler(VideoAssembler):
             "-r", "30",
             "-an",
             "-c:v", "libx264",
+            "-threads", "1",
             "-preset", quality_preset["preset"],
             "-crf", str(quality_preset["crf"]),
             output
