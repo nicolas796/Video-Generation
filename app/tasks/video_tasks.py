@@ -93,16 +93,37 @@ def assemble_final_video_async(
         )
         
         from app.utils.clip_assets import download_clip_assets
-        
-        # Get all ready clips that need downloading
-        ready_clips = VideoClip.query.filter_by(
-            use_case_id=use_case_id,
-            status='ready'
+
+        # Get all clips that could be used in assembly (ready or complete).
+        # The web service may have already polled Pollo and set file_path, but
+        # that file lives on the web service's disk, not the worker's.  We must
+        # check actual file existence on the local filesystem.
+        assembly_clips = VideoClip.query.filter(
+            VideoClip.use_case_id == use_case_id,
+            VideoClip.status.in_(['ready', 'complete'])
         ).all()
-        
+
         downloaded_count = 0
-        for clip in ready_clips:
-            if clip.pollo_video_url and not clip.file_path:
+        for clip in assembly_clips:
+            if not clip.pollo_video_url:
+                continue
+            # Check whether the file actually exists on this worker's disk
+            needs_download = False
+            if not clip.file_path:
+                needs_download = True
+            else:
+                resolved = os.path.join(upload_folder, clip.file_path)
+                if not os.path.exists(resolved):
+                    needs_download = True
+                    current_app.logger.info(
+                        "Clip file_path set but file missing on worker disk, re-downloading",
+                        extra={
+                            'clip_id': clip.id,
+                            'file_path': clip.file_path,
+                            'resolved': resolved,
+                        }
+                    )
+            if needs_download:
                 try:
                     current_app.logger.info(
                         "Downloading clip in worker",
@@ -129,7 +150,7 @@ def assemble_final_video_async(
                     )
                     clip.status = 'error'
                     clip.error_message = f"Download failed: {str(e)}"
-        
+
         if downloaded_count > 0:
             db.session.commit()
             current_app.logger.info(
