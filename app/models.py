@@ -336,6 +336,7 @@ class VideoClip(db.Model):
     
     # Pollo.ai specific
     pollo_job_id = db.Column(db.String(100))
+    pollo_video_url = db.Column(db.String(1000))
     model_used = db.Column(db.String(50))  # e.g., "minimax-video-01"
     
     # Clip analysis
@@ -351,6 +352,8 @@ class VideoClip(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
     
+    READY_STATUSES = ('complete', 'ready')
+    
     def __repr__(self):
         return f'<VideoClip {self.id}>'
     
@@ -363,6 +366,7 @@ class VideoClip(db.Model):
             'file_path': self.file_path,
             'thumbnail_path': self.thumbnail_path,
             'pollo_job_id': self.pollo_job_id,
+            'pollo_video_url': self.pollo_video_url,
             'model_used': self.model_used,
             'duration': self.duration,
             'content_description': self.content_description,
@@ -374,6 +378,10 @@ class VideoClip(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None
         }
+
+    def is_ready(self) -> bool:
+        """Return True if the clip has finished generating remotely."""
+        return (self.status or '').lower() in self.READY_STATUSES
 
     def infer_content_type(self):
         """Best-effort categorization based on analysis metadata, tags, or prompt."""

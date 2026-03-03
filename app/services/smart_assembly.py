@@ -35,10 +35,10 @@ class SmartVideoAssembler(VideoAssembler):
         Instead of using all clips, the AI analyzes and selects the best segments
         to fit the target duration while maintaining narrative flow.
         """
-        # Get all complete clips
-        clips = VideoClip.query.filter_by(
-            use_case_id=use_case.id,
-            status="complete"
+        # Get all complete or ready clips
+        clips = VideoClip.query.filter(
+            VideoClip.use_case_id == use_case.id,
+            VideoClip.status.in_(["complete", "ready"])
         ).order_by(VideoClip.sequence_order).all()
 
         if not clips:
@@ -56,27 +56,31 @@ class SmartVideoAssembler(VideoAssembler):
             strategy = "select_and_trim"
             selected_clips = self._intelligent_clip_selection(clips, target)
         
-        # Ensure each selected clip has a downloaded file (path set + file exists)
-        missing_path = [clip.id for clip in selected_clips if not clip.file_path]
-        if missing_path:
-            return {
-                "success": False,
-                "error": f"Selected clips missing file_path in DB: {missing_path}"
-            }
-        missing_on_disk = []
+        # Ensure each selected clip has a downloaded file that actually exists
+        missing = []
+        missing_with_paths = []
         for clip in selected_clips:
-            resolved = self._resolve_path(clip.file_path)
-            if not os.path.exists(resolved):
-                missing_on_disk.append({
-                    'clip_id': clip.id,
-                    'file_path': clip.file_path,
-                    'resolved_path': resolved,
-                    'upload_folder': self.upload_folder,
-                })
-        if missing_on_disk:
+            if not clip.file_path:
+                missing.append(clip.id)
+            else:
+                clip_path = self._resolve_path(clip.file_path)
+                if not os.path.exists(clip_path):
+                    missing.append(clip.id)
+                    missing_with_paths.append({
+                        'clip_id': clip.id,
+                        'file_path': clip.file_path,
+                        'resolved_path': clip_path,
+                        'upload_folder': self.upload_folder,
+                        'pollo_job_id': clip.pollo_job_id
+                    })
+
+        if missing:
+            error_msg = f"Selected clips missing files: {missing}"
+            if missing_with_paths:
+                error_msg += f". Files not found at resolved paths: {missing_with_paths}"
             return {
                 "success": False,
-                "error": f"Clip files not found on disk: {missing_on_disk}"
+                "error": error_msg
             }
 
         audio_path = None
