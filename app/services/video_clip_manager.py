@@ -753,6 +753,9 @@ class VideoClipManager:
                 dirty = True
 
             video_url = self.pollo_client._extract_video_url(status_result.get('result'))
+            if video_url and not clip.pollo_video_url:
+                clip.pollo_video_url = video_url
+                dirty = True
             if video_url and not clip.file_path:
                 if self._download_clip_video(clip, video_url):
                     dirty = True
