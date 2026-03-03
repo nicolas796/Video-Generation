@@ -2759,10 +2759,137 @@ def get_assembly_data(use_case_id):
     })
 
 
+def _run_assembly(ctx, app, use_case_id, script_id, options, upload_folder):
+    """Assembly worker — runs inside a background thread.
+
+    ``ctx`` is a :class:`app.tasks.thread_runner.TaskContext` used to
+    report progress back to the polling endpoint.
+    """
+    from app.services.smart_assembly import SmartVideoAssembler
+    from app.services.voiceover import VoiceoverGenerator
+    from app.utils.clip_assets import download_clip_assets
+    from app.services.pollo_ai import PolloAIClient
+
+    with app.app_context():
+        ffmpeg_path = app.config.get('FFMPEG_PATH', 'ffmpeg')
+        upload_folder = os.path.abspath(upload_folder)
+
+        ctx.update_state('STARTED', progress=5,
+                         message='Starting video assembly...', step='initializing')
+
+        use_case = db.session.get(UseCase, use_case_id)
+        script = db.session.get(Script, script_id)
+        if not use_case or not script:
+            raise ValueError("Use case or script not found")
+
+        # ── Download missing clips ────────────────────────────────
+        ctx.update_state('STARTED', progress=8,
+                         message='Downloading video clips...', step='downloading_clips')
+
+        assembly_clips = VideoClip.query.filter(
+            VideoClip.use_case_id == use_case_id,
+            VideoClip.status.in_(['ready', 'complete'])
+        ).all()
+
+        downloaded_count = 0
+        pollo_client = None
+        for clip in assembly_clips:
+            video_url = clip.pollo_video_url
+            if not video_url and clip.pollo_job_id:
+                try:
+                    if pollo_client is None:
+                        pollo_client = PolloAIClient()
+                    status_result = pollo_client.check_job_status(clip.pollo_job_id, clip=clip)
+                    if status_result.get('success'):
+                        video_url = pollo_client._extract_video_url(status_result.get('result'))
+                        if video_url:
+                            clip.pollo_video_url = video_url
+                except Exception:
+                    pass
+
+            if not video_url:
+                continue
+
+            needs_download = False
+            if not clip.file_path:
+                needs_download = True
+            else:
+                resolved = os.path.join(upload_folder, clip.file_path)
+                if not os.path.exists(resolved):
+                    needs_download = True
+
+            if needs_download:
+                try:
+                    assets = download_clip_assets(
+                        clip=clip, video_url=video_url,
+                        upload_root=upload_folder, logger=app.logger)
+                    clip.file_path = assets['video']
+                    clip.thumbnail_path = assets['thumbnail']
+                    clip.status = 'complete'
+                    downloaded_count += 1
+                except Exception as e:
+                    clip.status = 'error'
+                    clip.error_message = f"Download failed: {e}"
+
+        if downloaded_count > 0:
+            db.session.commit()
+
+        # ── Voiceover ─────────────────────────────────────────────
+        ctx.update_state('PROGRESS', progress=15,
+                         message='Preparing voiceover...', step='voiceover')
+
+        voiceover_path = options.get('voiceover_path')
+        include_voiceover = options.get('include_voiceover', True)
+        if include_voiceover and not voiceover_path:
+            generator = VoiceoverGenerator(
+                api_key=app.config.get('ELEVENLABS_API_KEY'),
+                upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
+            voiceover_result = generator.generate_voiceover(
+                use_case=use_case, script=script,
+                force=options.get('force_voiceover', False),
+                background_music=options.get('background_music'))
+            if not voiceover_result.get('success'):
+                raise RuntimeError(voiceover_result.get('error', 'Voiceover generation failed'))
+            voiceover_path = voiceover_result['file_path']
+
+        # ── Assemble ──────────────────────────────────────────────
+        ctx.update_state('PROGRESS', progress=30,
+                         message='Merging video clips...', step='assembly')
+
+        assembler = SmartVideoAssembler(upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
+        assembly_result = assembler.assemble_use_case_smart(
+            use_case=use_case, script=script,
+            audio_relative_path=voiceover_path,
+            transition=options.get('transition', 'cut'),
+            quality=options.get('quality', 'medium'),
+            format_override=options.get('format_override'),
+            transition_duration=float(options.get('transition_duration', 0.5)))
+
+        if not assembly_result.get('success'):
+            raise RuntimeError(assembly_result.get('error', 'Assembly failed'))
+
+        final_video_data = assembly_result.get('final_video') or {}
+        if not final_video_data:
+            raise RuntimeError('Assembly completed without final video data')
+
+        ctx.update_state('PROGRESS', progress=95,
+                         message='Finalizing video...', step='finalizing')
+
+        return {
+            'success': True,
+            'video_path': final_video_data.get('file_path'),
+            'duration': final_video_data.get('duration'),
+            'file_size': final_video_data.get('file_size'),
+            'final_video_id': final_video_data.get('id'),
+        }
+
+
 @main_bp.route('/api/use-cases/<int:use_case_id>/assemble', methods=['POST'])
 @login_required
 def assemble_final_video(use_case_id):
-    """Trigger final video assembly (Phase 8) - Async with fallback."""
+    """Trigger final video assembly (Phase 8) — runs in a background thread."""
+    from app.tasks import thread_runner
+
     use_case = UseCase.query.get_or_404(use_case_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
 
@@ -2779,188 +2906,78 @@ def assemble_final_video(use_case_id):
         return jsonify({'error': 'Complete clips are required before assembly'}), 400
 
     data = request.get_json() or {}
-    transition = data.get('transition', 'cut')
-    quality = data.get('quality', 'medium')
-    background_music = data.get('background_music')
-    force_voiceover = data.get('force_voiceover', False)
-    include_voiceover = data.get('include_voiceover', True)
-    transition_duration = float(data.get('transition_duration', 0.5))
-    format_override = data.get('format')
-
     upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
-    ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
 
-    # Check if Celery is available for async processing
-    from app import celery as celery_app
-    celery_available = bool(celery_app and current_app.config.get('CELERY_AVAILABLE', False))
-    celery_disabled_reason = current_app.config.get('CELERY_DISABLED_REASON')
-    running_in_render = bool(os.getenv('RENDER'))
+    options = {
+        'transition': data.get('transition', 'cut'),
+        'quality': data.get('quality', 'medium'),
+        'background_music': data.get('background_music'),
+        'force_voiceover': data.get('force_voiceover', False),
+        'include_voiceover': data.get('include_voiceover', True),
+        'transition_duration': float(data.get('transition_duration', 0.5)),
+        'format_override': data.get('format'),
+        'voiceover_path': data.get('voiceover_path'),
+    }
 
-    if not celery_available and running_in_render:
-        current_app.logger.error(
-            'Async assembly is unavailable on Render: %s',
-            celery_disabled_reason or 'missing REDIS_URL/CELERY_BROKER_URL'
-        )
-        return jsonify({
-            'success': False,
-            'error': 'Background assembly service is not configured',
-            'details': celery_disabled_reason or 'Set REDIS_URL/CELERY_BROKER_URL to your Redis service connection string.',
-            'needs_configuration': True,
-            'hint': 'Link the Render web service to the Redis instance so Celery can queue long-running ffmpeg jobs.'
-        }), 503
-
-    if celery_available:
-        # Async processing via Celery
-        try:
-            from app.tasks.video_tasks import assemble_final_video_async
-
-            options = {
-                'transition': transition,
-                'quality': quality,
-                'background_music': background_music,
-                'force_voiceover': force_voiceover,
-                'include_voiceover': include_voiceover,
-                'transition_duration': transition_duration,
-                'format_override': format_override,
-                'voiceover_path': data.get('voiceover_path')
-            }
-
-            # Trigger async task
-            task = assemble_final_video_async.delay(
-                use_case_id=use_case_id,
-                script_id=script.id,
-                options=options,
-                upload_root=upload_folder
-            )
-
-            current_app.logger.info(
-                f'Async assembly triggered: task_id={task.id}, use_case={use_case_id}'
-            )
-
-            return jsonify({
-                'success': True,
-                'async': True,
-                'task_id': task.id,
-                'status': 'PENDING',
-                'message': 'Video assembly started in background. Poll for status.',
-                'poll_url': f'/api/use-cases/{use_case_id}/assembly-status/{task.id}'
-            })
-
-        except Exception as e:
-            current_app.logger.error(f'Failed to trigger async assembly: {e}')
-            # Fall back to sync if Celery fails
-            current_app.logger.info('Falling back to synchronous assembly')
-
-    # Synchronous processing (fallback)
-    voiceover_path = data.get('voiceover_path')
-    if include_voiceover:
-        try:
-            generator = VoiceoverGenerator(
-                api_key=current_app.config.get('ELEVENLABS_API_KEY'),
-                upload_folder=upload_folder,
-                ffmpeg_path=ffmpeg_path
-            )
-        except ValueError as exc:
-            return jsonify({'error': str(exc)}), 500
-
-        if not voiceover_path:
-            voiceover_result = generator.generate_voiceover(
-                use_case=use_case,
-                script=script,
-                force=force_voiceover,
-                background_music=background_music
-            )
-            if not voiceover_result.get('success'):
-                status_code = 500 if 'error' in voiceover_result else 400
-                return jsonify(voiceover_result), status_code
-            voiceover_path = voiceover_result['file_path']
-
-    # Use Smart Assembler for intelligent clip selection and trimming
-    assembler = SmartVideoAssembler(upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
-    assembly_result = assembler.assemble_use_case_smart(
-        use_case=use_case,
-        script=script,
-        audio_relative_path=voiceover_path,
-        transition=transition,
-        quality=quality,
-        format_override=format_override,
-        transition_duration=transition_duration
+    # Submit to background thread
+    task_id = thread_runner.submit(
+        _run_assembly,
+        current_app._get_current_object(),  # real app, not proxy
+        use_case_id, script.id, options, upload_folder,
     )
 
-    if not assembly_result.get('success'):
-        return jsonify(assembly_result), 500
+    current_app.logger.info('Assembly started in thread: task_id=%s, use_case=%s',
+                            task_id, use_case_id)
 
-    return jsonify(assembly_result)
+    return jsonify({
+        'success': True,
+        'async': True,
+        'task_id': task_id,
+        'status': 'PENDING',
+        'message': 'Video assembly started in background. Poll for status.',
+        'poll_url': f'/api/use-cases/{use_case_id}/assembly-status/{task_id}'
+    })
 
 
 @main_bp.route('/api/use-cases/<int:use_case_id>/assembly-status/<task_id>', methods=['GET'])
 @login_required
 def get_assembly_status(use_case_id, task_id):
-    """Check the status of an async assembly job."""
-    from app import celery as celery_app
-    celery_available = bool(celery_app and current_app.config.get('CELERY_AVAILABLE', False))
+    """Check the status of an async assembly job (thread-based)."""
+    from app.tasks import thread_runner
 
-    if not celery_available:
+    state = thread_runner.get_task(task_id)
+    if state is None:
         return jsonify({
-            'success': False,
-            'error': 'Async processing not available',
-            'details': current_app.config.get('CELERY_DISABLED_REASON')
-        }), 503
-
-    try:
-        result = celery_app.AsyncResult(task_id)
-
-        response = {
             'task_id': task_id,
-            'status': result.status,
-            'success': result.successful() if result.ready() else None
-        }
-
-        if result.status == 'PENDING':
-            response['message'] = 'Assembly is queued and waiting to start...'
-            response['progress'] = 0
-
-        elif result.status == 'STARTED':
-            info = result.info or {}
-            response['message'] = info.get('message', 'Assembly in progress...')
-            response['progress'] = info.get('progress', 10)
-            response['step'] = info.get('step', 'initializing')
-
-        elif result.status == 'PROGRESS':
-            info = result.info or {}
-            response['message'] = info.get('message', 'Processing...')
-            response['progress'] = info.get('progress', 50)
-            response['step'] = info.get('step', 'processing')
-
-        elif result.status == 'RETRY':
-            info = result.info or {}
-            response['message'] = info.get('message', 'Connection issue, retrying...')
-            response['progress'] = info.get('progress', 5)
-            response['step'] = info.get('step', 'retry')
-
-        elif result.ready():
-            if result.successful():
-                result_data = result.get()
-                response['success'] = True
-                response['message'] = 'Assembly complete!'
-                response['progress'] = 100
-                response['video_path'] = result_data.get('video_path')
-                response['duration'] = result_data.get('duration')
-                response['file_size'] = result_data.get('file_size')
-                response['final_video_id'] = result_data.get('final_video_id')
-            else:
-                response['success'] = False
-                response['message'] = 'Assembly failed'
-                response['error'] = str(result.result) if result.result else 'Unknown error'
-
-        return jsonify(response)
-
-    except Exception as e:
-        current_app.logger.error(f'Error checking assembly status: {e}')
-        return jsonify({
+            'status': 'UNKNOWN',
             'success': False,
-            'error': f'Failed to check status: {str(e)}'
-        }), 500
+            'message': 'Task not found — it may have expired.',
+        }), 404
+
+    response = {
+        'task_id': task_id,
+        'status': state.get('status', 'PENDING'),
+        'success': state.get('success'),
+        'message': state.get('message', ''),
+        'progress': state.get('progress', 0),
+    }
+
+    if state.get('step'):
+        response['step'] = state['step']
+
+    if state.get('status') == 'SUCCESS':
+        result_data = state.get('result') or {}
+        response['video_path'] = result_data.get('video_path')
+        response['duration'] = result_data.get('duration')
+        response['file_size'] = result_data.get('file_size')
+        response['final_video_id'] = result_data.get('final_video_id')
+        response['message'] = 'Assembly complete!'
+
+    elif state.get('status') == 'FAILURE':
+        response['error'] = state.get('error', 'Unknown error')
+        response['message'] = f"Assembly failed: {state.get('error', 'Unknown error')}"
+
+    return jsonify(response)
 
 
 @main_bp.route('/api/use-cases/<int:use_case_id>/final-video', methods=['GET'])
