@@ -62,6 +62,9 @@ def get_upload_folder():
     # Check for Render Disk (persistent storage)
     render_disk = os.getenv('RENDER_DISK_MOUNT_PATH')
     if render_disk and os.path.exists(render_disk):
+        # Avoid doubling 'uploads' if the mount path already ends with it
+        if os.path.basename(render_disk.rstrip('/')) == 'uploads':
+            return render_disk
         return os.path.join(render_disk, 'uploads')
     
     # Check for explicit UPLOAD_FOLDER env var

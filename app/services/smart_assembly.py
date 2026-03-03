@@ -70,9 +70,10 @@ class SmartVideoAssembler(VideoAssembler):
                         'clip_id': clip.id,
                         'file_path': clip.file_path,
                         'resolved_path': clip_path,
+                        'upload_folder': self.upload_folder,
                         'pollo_job_id': clip.pollo_job_id
                     })
-        
+
         if missing:
             error_msg = f"Selected clips missing files: {missing}"
             if missing_with_paths:
