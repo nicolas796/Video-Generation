@@ -1,0 +1,309 @@
+"""Brand management routes for multi-tenant support."""
+from datetime import datetime, timedelta
+
+from flask import Blueprint, render_template, jsonify, request, session, redirect, url_for, abort, g
+from flask_login import login_required, current_user
+
+from app import db
+from app.models import Brand, BrandMembership, User, UsageRecord, Product, UseCase, VideoClip, FinalVideo
+from app.brand_context import require_brand, require_brand_role
+
+brand_bp = Blueprint('brand', __name__, url_prefix='/brand')
+
+
+# ============================================================================
+# Brand Selection & Switching
+# ============================================================================
+
+@brand_bp.route('/select')
+@login_required
+def select_brand():
+    """Brand selection page — shown when user has no active brand or wants to switch."""
+    brands = [m.brand for m in current_user.brand_memberships]
+    return render_template('brand_select.html', brands=brands)
+
+
+@brand_bp.route('/switch/<int:brand_id>', methods=['POST'])
+@login_required
+def switch_brand(brand_id):
+    """Switch the active brand for the current session."""
+    if not current_user.has_brand_access(brand_id):
+        abort(403, 'You do not have access to this brand.')
+
+    brand = db.session.get(Brand, brand_id)
+    if not brand:
+        abort(404)
+
+    session['active_brand_id'] = brand.id
+    current_user.active_brand_id = brand.id
+    db.session.commit()
+
+    return jsonify({'success': True, 'brand': brand.to_dict()})
+
+
+# ============================================================================
+# Brand CRUD
+# ============================================================================
+
+@brand_bp.route('/create', methods=['GET', 'POST'])
+@login_required
+def create_brand():
+    """Create a new brand."""
+    if request.method == 'GET':
+        return render_template('brand_create.html')
+
+    data = request.get_json() if request.is_json else request.form
+    name = data.get('name', '').strip()
+
+    if not name:
+        if request.is_json:
+            return jsonify({'error': 'Brand name is required'}), 400
+        return render_template('brand_create.html', error='Brand name is required')
+
+    slug = Brand.slugify(name)
+    if Brand.query.filter_by(slug=slug).first():
+        if request.is_json:
+            return jsonify({'error': 'A brand with this name already exists'}), 409
+        return render_template('brand_create.html', error='A brand with this name already exists')
+
+    brand = Brand(name=name, slug=slug)
+    db.session.add(brand)
+    db.session.flush()
+
+    # Make the creator an owner
+    membership = BrandMembership(user_id=current_user.id, brand_id=brand.id, role='owner')
+    db.session.add(membership)
+
+    # Set as active brand
+    session['active_brand_id'] = brand.id
+    current_user.active_brand_id = brand.id
+    db.session.commit()
+
+    if request.is_json:
+        return jsonify({'success': True, 'brand': brand.to_dict()}), 201
+
+    return redirect(url_for('main.index'))
+
+
+@brand_bp.route('/api/brands', methods=['GET'])
+@login_required
+def list_brands():
+    """List all brands the current user has access to."""
+    memberships = BrandMembership.query.filter_by(user_id=current_user.id).all()
+    brands = []
+    for m in memberships:
+        brand_data = m.brand.to_dict()
+        brand_data['role'] = m.role
+        brand_data['is_active'] = (g.get('current_brand') and g.current_brand.id == m.brand_id)
+        brands.append(brand_data)
+    return jsonify({'success': True, 'brands': brands})
+
+
+# ============================================================================
+# Brand Settings
+# ============================================================================
+
+@brand_bp.route('/settings')
+@login_required
+@require_brand
+def brand_settings():
+    """Brand settings page."""
+    brand = g.current_brand
+    membership = current_user.get_membership(brand.id)
+    is_admin = membership and membership.has_min_role('admin')
+    return render_template('brand_settings.html', brand=brand, is_admin=is_admin)
+
+
+@brand_bp.route('/api/settings', methods=['GET'])
+@login_required
+@require_brand
+def get_brand_settings():
+    """Get current brand settings."""
+    brand = g.current_brand
+    return jsonify({'success': True, 'brand': brand.to_dict()})
+
+
+@brand_bp.route('/api/settings', methods=['PUT'])
+@login_required
+@require_brand_role('admin')
+def update_brand_settings():
+    """Update brand settings (admin+ only)."""
+    brand = g.current_brand
+    data = request.get_json()
+
+    if 'name' in data:
+        new_name = data['name'].strip()
+        if new_name:
+            brand.name = new_name
+            new_slug = Brand.slugify(new_name)
+            existing = Brand.query.filter(Brand.slug == new_slug, Brand.id != brand.id).first()
+            if not existing:
+                brand.slug = new_slug
+
+    if 'pollo_api_key' in data:
+        brand.pollo_api_key = data['pollo_api_key'] or None
+    if 'elevenlabs_api_key' in data:
+        brand.elevenlabs_api_key = data['elevenlabs_api_key'] or None
+    if 'openai_api_key' in data:
+        brand.openai_api_key = data['openai_api_key'] or None
+    if 'settings' in data and isinstance(data['settings'], dict):
+        brand.settings = {**(brand.settings or {}), **data['settings']}
+
+    db.session.commit()
+    return jsonify({'success': True, 'brand': brand.to_dict()})
+
+
+# ============================================================================
+# Member Management
+# ============================================================================
+
+@brand_bp.route('/api/members', methods=['GET'])
+@login_required
+@require_brand
+def list_members():
+    """List all members of the current brand."""
+    brand = g.current_brand
+    memberships = BrandMembership.query.filter_by(brand_id=brand.id).all()
+    return jsonify({
+        'success': True,
+        'members': [m.to_dict() for m in memberships]
+    })
+
+
+@brand_bp.route('/api/members', methods=['POST'])
+@login_required
+@require_brand_role('admin')
+def add_member():
+    """Add a member to the current brand (admin+ only)."""
+    brand = g.current_brand
+    data = request.get_json()
+
+    username = data.get('username', '').strip()
+    role = data.get('role', 'member')
+
+    if role not in ('viewer', 'member', 'admin'):
+        return jsonify({'error': 'Invalid role. Use viewer, member, or admin.'}), 400
+
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return jsonify({'error': f'User "{username}" not found'}), 404
+
+    existing = BrandMembership.query.filter_by(user_id=user.id, brand_id=brand.id).first()
+    if existing:
+        return jsonify({'error': f'User "{username}" is already a member'}), 409
+
+    membership = BrandMembership(user_id=user.id, brand_id=brand.id, role=role)
+    db.session.add(membership)
+    db.session.commit()
+
+    return jsonify({'success': True, 'membership': membership.to_dict()}), 201
+
+
+@brand_bp.route('/api/members/<int:membership_id>', methods=['PUT'])
+@login_required
+@require_brand_role('admin')
+def update_member(membership_id):
+    """Update a member's role (admin+ only)."""
+    brand = g.current_brand
+    membership = BrandMembership.query.get_or_404(membership_id)
+
+    if membership.brand_id != brand.id:
+        abort(404)
+
+    data = request.get_json()
+    new_role = data.get('role')
+
+    if new_role not in ('viewer', 'member', 'admin', 'owner'):
+        return jsonify({'error': 'Invalid role'}), 400
+
+    # Prevent demoting the last owner
+    if membership.role == 'owner' and new_role != 'owner':
+        owner_count = BrandMembership.query.filter_by(brand_id=brand.id, role='owner').count()
+        if owner_count <= 1:
+            return jsonify({'error': 'Cannot demote the last owner'}), 400
+
+    membership.role = new_role
+    db.session.commit()
+
+    return jsonify({'success': True, 'membership': membership.to_dict()})
+
+
+@brand_bp.route('/api/members/<int:membership_id>', methods=['DELETE'])
+@login_required
+@require_brand_role('admin')
+def remove_member(membership_id):
+    """Remove a member from the brand (admin+ only)."""
+    brand = g.current_brand
+    membership = BrandMembership.query.get_or_404(membership_id)
+
+    if membership.brand_id != brand.id:
+        abort(404)
+
+    # Prevent removing the last owner
+    if membership.role == 'owner':
+        owner_count = BrandMembership.query.filter_by(brand_id=brand.id, role='owner').count()
+        if owner_count <= 1:
+            return jsonify({'error': 'Cannot remove the last owner'}), 400
+
+    db.session.delete(membership)
+    db.session.commit()
+
+    return jsonify({'success': True, 'message': 'Member removed'})
+
+
+# ============================================================================
+# Usage & Cost Dashboard
+# ============================================================================
+
+@brand_bp.route('/usage')
+@login_required
+@require_brand
+def usage_dashboard():
+    """Usage and cost monitoring dashboard."""
+    return render_template('brand_usage.html', brand=g.current_brand)
+
+
+@brand_bp.route('/api/usage', methods=['GET'])
+@login_required
+@require_brand
+def get_usage():
+    """Get usage statistics for the current brand."""
+    brand = g.current_brand
+    days = request.args.get('days', 30, type=int)
+    since = datetime.utcnow() - timedelta(days=days)
+
+    records = UsageRecord.query.filter(
+        UsageRecord.brand_id == brand.id,
+        UsageRecord.created_at >= since
+    ).order_by(UsageRecord.created_at.desc()).all()
+
+    # Aggregate by service
+    by_service = {}
+    total_cost = 0
+    for r in records:
+        if r.service not in by_service:
+            by_service[r.service] = {'count': 0, 'total_cost': 0, 'total_units': 0}
+        by_service[r.service]['count'] += 1
+        by_service[r.service]['total_cost'] += r.estimated_cost_usd or 0
+        by_service[r.service]['total_units'] += r.units_consumed or 0
+        total_cost += r.estimated_cost_usd or 0
+
+    # Resource counts
+    product_count = Product.query.filter_by(brand_id=brand.id).count()
+    use_case_count = UseCase.query.filter_by(brand_id=brand.id).count()
+    clip_count = VideoClip.query.filter_by(brand_id=brand.id).count()
+    video_count = FinalVideo.query.filter_by(brand_id=brand.id).count()
+
+    return jsonify({
+        'success': True,
+        'period_days': days,
+        'total_cost_usd': round(total_cost, 4),
+        'by_service': by_service,
+        'resource_counts': {
+            'products': product_count,
+            'use_cases': use_case_count,
+            'video_clips': clip_count,
+            'final_videos': video_count,
+        },
+        'recent_records': [r.to_dict() for r in records[:50]],
+    })

@@ -127,8 +127,14 @@ def create_app(config_name='default'):
     # Register blueprints
     from app.routes import main_bp
     from app.auth import auth_bp
+    from app.brand_routes import brand_bp
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(brand_bp)
+
+    # Register brand context middleware (loads g.current_brand on every request)
+    from app.brand_context import load_brand_context
+    app.before_request(load_brand_context)
     
     # Register error handlers
     register_error_handlers(app)

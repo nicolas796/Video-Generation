@@ -2,12 +2,12 @@
 import os
 from functools import wraps
 
-from flask import Blueprint, render_template, redirect, url_for, request, flash, current_app
+from flask import Blueprint, render_template, redirect, url_for, request, flash, current_app, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from werkzeug.security import check_password_hash
 
 from app import db
-from app.models import User
+from app.models import User, Brand, BrandMembership
 
 # Initialize blueprint
 auth_bp = Blueprint('auth', __name__)
@@ -60,6 +60,21 @@ def create_default_admin():
         )
         admin.set_password(admin_password)
         db.session.add(admin)
+        db.session.flush()
+
+        # Auto-assign to Default brand if it exists
+        default_brand = Brand.query.filter_by(slug='default').first()
+        if default_brand:
+            existing_membership = BrandMembership.query.filter_by(
+                user_id=admin.id, brand_id=default_brand.id
+            ).first()
+            if not existing_membership:
+                membership = BrandMembership(
+                    user_id=admin.id, brand_id=default_brand.id, role='owner'
+                )
+                db.session.add(membership)
+            admin.active_brand_id = default_brand.id
+
         db.session.commit()
         current_app.logger.info(f'Default admin user created: {admin_username}')
     except sqlalchemy.exc.ProgrammingError as e:
@@ -135,14 +150,27 @@ def login():
             login_user(user, remember=remember)
             user.last_login = db.func.now()
             db.session.commit()
-            
+
+            # Set active brand in session
+            membership = BrandMembership.query.filter_by(user_id=user.id).first()
+            if membership:
+                session['active_brand_id'] = membership.brand_id
+                if not user.active_brand_id:
+                    user.active_brand_id = membership.brand_id
+                    db.session.commit()
+
             # Redirect to next page or index
             next_page = request.args.get('next')
             # Security: only allow relative URLs (prevent open redirect)
             if next_page and not next_page.startswith('/'):
                 next_page = None
-            
+
             flash(f'Welcome back, {user.username}!', 'success')
+
+            # If user has no brand, redirect to brand selection
+            if not membership:
+                return redirect(url_for('brand.select_brand'))
+
             return redirect(next_page or url_for('main.index'))
         else:
             flash('Invalid username or password.', 'danger')
