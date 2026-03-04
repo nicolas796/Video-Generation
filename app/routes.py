@@ -1987,7 +1987,7 @@ def generate_video_clips(use_case_id):
         # Get scene template and other parameters
         scene_template = data.get('scene_template', 'none')
         custom_description = data.get('custom_description', '')
-        selected_image_url = data.get('selected_image_url')
+        selected_image_url = data.get('selected_image_url') or data.get('generated_scene_url')
 
         # Get scene context for prompt enhancement
         scene_context = _get_scene_context(scene_template, product, script, custom_description)

@@ -1123,6 +1123,9 @@ let availableImages = [];
 
 // Open image selection modal when clicking generate
 async function startGeneration() {
+    // Reset previous selection so stale values don't leak through
+    selectedImageUrl = null;
+    document.getElementById('selectedImageInfo').classList.add('d-none');
     // Load product images
     await loadProductImages();
     // Show the modal
