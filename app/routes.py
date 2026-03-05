@@ -2761,23 +2761,36 @@ def get_assembly_data(use_case_id):
     analyzed_count = len([clip for clip in ordered_clips if clip.get('content_description')])
 
     # Enhanced duration status with smart assembly info
-    has_complete = stats.get('is_complete', False) or stats.get('complete', 0) > 0
+    # Count both 'complete' (downloaded) and 'ready' (generated, not yet downloaded)
+    # clips as eligible — the assembly worker downloads missing clips automatically.
+    ready_or_complete = stats.get('complete', 0) + sum(
+        1 for clip in ordered_clips
+        if clip.get('status') == 'ready'
+    )
+    has_usable_clips = ready_or_complete > 0
+
     if total_duration < target_duration * 0.5:
+        # Not enough content yet, but if clips are 'ready' their duration
+        # may not be known.  Allow assembly if we have usable clips at all.
         duration_status = 'insufficient'
-        duration_message = f'Need {(target_duration - total_duration):.1f}s more content ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
-        assembly_ready = False
+        if has_usable_clips:
+            duration_message = f'{ready_or_complete} clips available — duration may increase after download'
+            assembly_ready = True
+        else:
+            duration_message = f'Need {(target_duration - total_duration):.1f}s more content ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
+            assembly_ready = False
     elif total_duration < target_duration * 0.8:
         duration_status = 'warning'
         duration_message = f'Could use {(target_duration - total_duration):.1f}s more ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
-        assembly_ready = has_complete
+        assembly_ready = has_usable_clips
     elif variance > 5:
         duration_status = 'good'
         duration_message = f'{len(ordered_clips)} clips, {total_duration:.1f}s total - AI will select best segments'
-        assembly_ready = has_complete
+        assembly_ready = has_usable_clips
     else:
         duration_status = 'success'
         duration_message = f'{len(ordered_clips)} clips, {total_duration:.1f}s total - Ready to assemble'
-        assembly_ready = has_complete
+        assembly_ready = has_usable_clips
 
     duration_summary = {
         'current': total_duration,
@@ -2958,12 +2971,12 @@ def assemble_final_video(use_case_id):
     if script.status != 'approved':
         return jsonify({'error': 'Script must be approved before final assembly'}), 400
 
-    completed_clips = VideoClip.query.filter_by(
-        use_case_id=use_case_id,
-        status='complete'
+    usable_clips = VideoClip.query.filter(
+        VideoClip.use_case_id == use_case_id,
+        VideoClip.status.in_(['complete', 'ready'])
     ).count()
-    if completed_clips == 0:
-        return jsonify({'error': 'Complete clips are required before assembly'}), 400
+    if usable_clips == 0:
+        return jsonify({'error': 'No clips available for assembly — generate clips first'}), 400
 
     data = request.get_json() or {}
     upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
