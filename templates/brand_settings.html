@@ -64,8 +64,8 @@
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <h5 class="mb-0">Team Members</h5>
                     {% if is_admin %}
-                    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addMemberModal">
-                        <i class="bi bi-person-plus me-1"></i>Add Member
+                    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#inviteMemberModal">
+                        <i class="bi bi-envelope-plus me-1"></i>Invite Member
                     </button>
                     {% endif %}
                 </div>
@@ -74,25 +74,40 @@
                 </div>
             </div>
         </div>
+
+        <!-- Pending Invitations -->
+        {% if is_admin %}
+        <div class="col-md-12 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header"><h5 class="mb-0">Pending Invitations</h5></div>
+                <div class="card-body">
+                    <div id="invitationsList">Loading...</div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </div>
 
-<!-- Add Member Modal -->
-<div class="modal fade" id="addMemberModal" tabindex="-1">
+<!-- Invite Member Modal -->
+<div class="modal fade" id="inviteMemberModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Add Team Member</h5>
+                <h5 class="modal-title"><i class="bi bi-envelope-plus me-2"></i>Invite Team Member</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
+                <div id="inviteError" class="alert alert-danger d-none"></div>
+                <div id="inviteSuccess" class="alert alert-success d-none"></div>
                 <div class="mb-3">
-                    <label class="form-label">Username</label>
-                    <input type="text" class="form-control" id="newMemberUsername" placeholder="Enter username">
+                    <label class="form-label">Email Address</label>
+                    <input type="email" class="form-control" id="inviteEmail" placeholder="colleague@company.com">
+                    <div class="form-text">An invitation email will be sent with a link to join this brand.</div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Role</label>
-                    <select class="form-select" id="newMemberRole">
+                    <select class="form-select" id="inviteRole">
                         <option value="viewer">Viewer — can view only</option>
                         <option value="member" selected>Member — can create and edit</option>
                         <option value="admin">Admin — can manage members and settings</option>
@@ -101,7 +116,9 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="addMember()">Add Member</button>
+                <button type="button" class="btn btn-primary" id="sendInviteBtn" onclick="sendInvitation()">
+                    <i class="bi bi-send me-1"></i>Send Invitation
+                </button>
             </div>
         </div>
     </div>
@@ -139,6 +156,36 @@ function loadMembers() {
         });
 }
 
+function loadInvitations() {
+    {% if is_admin %}
+    fetch('/brand/api/invitations')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const container = document.getElementById('invitationsList');
+            const pending = data.invitations.filter(i => i.status === 'pending');
+            if (!pending.length) {
+                container.innerHTML = '<p class="text-muted">No pending invitations</p>';
+                return;
+            }
+            container.innerHTML = `
+                <table class="table table-sm">
+                    <thead><tr><th>Email</th><th>Role</th><th>Invited By</th><th>Sent</th><th>Expires</th><th></th></tr></thead>
+                    <tbody>${pending.map(i => `
+                        <tr>
+                            <td>${i.email}</td>
+                            <td><span class="badge bg-secondary">${i.role}</span></td>
+                            <td>${i.invited_by || '-'}</td>
+                            <td>${i.created_at ? new Date(i.created_at).toLocaleDateString() : '-'}</td>
+                            <td>${i.expires_at ? new Date(i.expires_at).toLocaleDateString() : '-'}</td>
+                            <td><button class="btn btn-sm btn-outline-danger" onclick="revokeInvitation(${i.id})"><i class="bi bi-x-circle"></i></button></td>
+                        </tr>
+                    `).join('')}</tbody>
+                </table>`;
+        });
+    {% endif %}
+}
+
 function saveBrandSettings() {
     fetch('/brand/api/settings', {
         method: 'PUT',
@@ -173,25 +220,59 @@ function saveApiKeys() {
     });
 }
 
-function addMember() {
-    const username = document.getElementById('newMemberUsername').value.trim();
-    const role = document.getElementById('newMemberRole').value;
-    if (!username) return alert('Username required');
+function sendInvitation() {
+    const email = document.getElementById('inviteEmail').value.trim();
+    const role = document.getElementById('inviteRole').value;
+    const errBox = document.getElementById('inviteError');
+    const successBox = document.getElementById('inviteSuccess');
+    const btn = document.getElementById('sendInviteBtn');
 
-    fetch('/brand/api/members', {
+    errBox.classList.add('d-none');
+    successBox.classList.add('d-none');
+
+    if (!email) { errBox.textContent = 'Email is required'; errBox.classList.remove('d-none'); return; }
+
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Sending...';
+
+    fetch('/brand/api/invitations', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
-        body: JSON.stringify({username, role})
+        body: JSON.stringify({email, role})
     })
     .then(r => r.json())
     .then(data => {
         if (data.success) {
-            bootstrap.Modal.getInstance(document.getElementById('addMemberModal')).hide();
-            loadMembers();
+            successBox.innerHTML = `Invitation sent to <strong>${email}</strong>!`;
+            if (!data.email_sent) {
+                successBox.innerHTML += `<br><small class="text-muted">SendGrid not configured. Share this link manually:<br><code>${data.accept_url}</code></small>`;
+            }
+            successBox.classList.remove('d-none');
+            document.getElementById('inviteEmail').value = '';
+            loadInvitations();
         } else {
-            alert(data.error || 'Failed to add member');
+            errBox.textContent = data.error || 'Failed to send invitation';
+            errBox.classList.remove('d-none');
         }
+    })
+    .catch(err => {
+        errBox.textContent = 'Network error';
+        errBox.classList.remove('d-none');
+    })
+    .finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-send me-1"></i>Send Invitation';
     });
+}
+
+function revokeInvitation(invitationId) {
+    if (!confirm('Revoke this invitation?')) return;
+    fetch(`/brand/api/invitations/${invitationId}`, {
+        method: 'DELETE',
+        headers: {'X-CSRFToken': csrfToken}
+    })
+    .then(r => r.json())
+    .then(() => loadInvitations());
 }
 
 function removeMember(membershipId) {
@@ -204,6 +285,9 @@ function removeMember(membershipId) {
     .then(() => loadMembers());
 }
 
-document.addEventListener('DOMContentLoaded', loadMembers);
+document.addEventListener('DOMContentLoaded', () => {
+    loadMembers();
+    loadInvitations();
+});
 </script>
 {% endblock %}

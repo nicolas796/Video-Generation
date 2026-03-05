@@ -1,5 +1,6 @@
 import re
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta
 from app import db
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -91,6 +92,58 @@ class BrandMembership(db.Model):
         return f'<BrandMembership user={self.user_id} brand={self.brand_id} role={self.role}>'
 
 
+class BrandInvitation(db.Model):
+    """Pending invitation to join a brand workspace."""
+
+    __tablename__ = 'brand_invitations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=False)
+    email = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(50), default='member')  # viewer, member, admin
+    token = db.Column(db.String(128), unique=True, nullable=False)
+
+    invited_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+
+    status = db.Column(db.String(50), default='pending')  # pending, accepted, expired, revoked
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    expires_at = db.Column(db.DateTime)
+    accepted_at = db.Column(db.DateTime)
+
+    # Relationships
+    brand = db.relationship('Brand', backref='invitations')
+    invited_by = db.relationship('User', backref='sent_invitations')
+
+    EXPIRY_DAYS = 7
+
+    @staticmethod
+    def generate_token():
+        return secrets.token_urlsafe(48)
+
+    @property
+    def is_expired(self):
+        if self.expires_at:
+            return datetime.utcnow() > self.expires_at
+        return False
+
+    @property
+    def is_valid(self):
+        return self.status == 'pending' and not self.is_expired
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'brand_id': self.brand_id,
+            'email': self.email,
+            'role': self.role,
+            'status': self.status,
+            'invited_by': self.invited_by.username if self.invited_by else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
+            'accepted_at': self.accepted_at.isoformat() if self.accepted_at else None,
+        }
+
+
 class UsageRecord(db.Model):
     """Tracks API usage and costs per brand for billing and monitoring."""
 
@@ -140,6 +193,7 @@ class User(UserMixin, db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(255), unique=True, nullable=True)
     password_hash = db.Column(db.String(256), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
     active_brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=True)

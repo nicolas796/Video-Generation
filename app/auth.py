@@ -7,7 +7,7 @@ from flask_login import LoginManager, login_user, logout_user, login_required, c
 from werkzeug.security import check_password_hash
 
 from app import db
-from app.models import User, Brand, BrandMembership
+from app.models import User, Brand, BrandMembership, BrandInvitation
 
 # Initialize blueprint
 auth_bp = Blueprint('auth', __name__)
@@ -186,6 +186,101 @@ def logout():
     logout_user()
     flash('You have been logged out.', 'info')
     return redirect(url_for('auth.login'))
+
+
+# ============================================================================
+# Invitation Acceptance
+# ============================================================================
+
+@auth_bp.route('/invite/<token>', methods=['GET', 'POST'])
+def accept_invitation(token):
+    """Accept a brand invitation — show signup/login form, then create membership."""
+    from datetime import datetime
+
+    invitation = BrandInvitation.query.filter_by(token=token).first()
+    if not invitation:
+        flash('Invalid invitation link.', 'danger')
+        return redirect(url_for('auth.login'))
+
+    if invitation.status != 'pending':
+        flash(f'This invitation has already been {invitation.status}.', 'warning')
+        return redirect(url_for('auth.login'))
+
+    if invitation.is_expired:
+        invitation.status = 'expired'
+        db.session.commit()
+        flash('This invitation has expired.', 'warning')
+        return redirect(url_for('auth.login'))
+
+    brand = db.session.get(Brand, invitation.brand_id)
+
+    # --- GET: show the acceptance form ---
+    if request.method == 'GET':
+        # If user is already logged in, let them accept directly
+        if current_user.is_authenticated:
+            return render_template(
+                'invite_accept.html',
+                invitation=invitation,
+                brand=brand,
+                logged_in=True,
+            )
+        return render_template(
+            'invite_accept.html',
+            invitation=invitation,
+            brand=brand,
+            logged_in=False,
+        )
+
+    # --- POST: process acceptance ---
+    if current_user.is_authenticated:
+        user = current_user
+    else:
+        # New user signup
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        confirm = request.form.get('confirm_password', '')
+
+        if not username or not password:
+            flash('Username and password are required.', 'danger')
+            return render_template('invite_accept.html', invitation=invitation, brand=brand, logged_in=False)
+        if password != confirm:
+            flash('Passwords do not match.', 'danger')
+            return render_template('invite_accept.html', invitation=invitation, brand=brand, logged_in=False)
+        if len(password) < 8:
+            flash('Password must be at least 8 characters.', 'danger')
+            return render_template('invite_accept.html', invitation=invitation, brand=brand, logged_in=False)
+        if User.query.filter_by(username=username).first():
+            flash('Username already taken. Please choose another or log in first.', 'danger')
+            return render_template('invite_accept.html', invitation=invitation, brand=brand, logged_in=False)
+
+        user = User(username=username, email=invitation.email, is_admin=False)
+        user.set_password(password)
+        db.session.add(user)
+        db.session.flush()
+        login_user(user)
+
+    # Create brand membership
+    existing = BrandMembership.query.filter_by(user_id=user.id, brand_id=brand.id).first()
+    if not existing:
+        membership = BrandMembership(user_id=user.id, brand_id=brand.id, role=invitation.role)
+        db.session.add(membership)
+
+    # Update invitation status
+    invitation.status = 'accepted'
+    invitation.accepted_at = datetime.utcnow()
+
+    # Set as active brand
+    user.active_brand_id = brand.id
+    session['active_brand_id'] = brand.id
+
+    # If logged-in user doesn't have email set, set it from invitation
+    if not user.email:
+        user.email = invitation.email
+
+    db.session.commit()
+
+    flash(f'Welcome to {brand.name}!', 'success')
+    return redirect(url_for('main.index'))
 
 
 @auth_bp.route('/change-password', methods=['POST'])

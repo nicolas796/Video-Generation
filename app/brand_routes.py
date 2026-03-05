@@ -5,7 +5,7 @@ from flask import Blueprint, render_template, jsonify, request, session, redirec
 from flask_login import login_required, current_user
 
 from app import db
-from app.models import Brand, BrandMembership, User, UsageRecord, Product, UseCase, VideoClip, FinalVideo
+from app.models import Brand, BrandMembership, BrandInvitation, User, UsageRecord, Product, UseCase, VideoClip, FinalVideo
 from app.brand_context import require_brand, require_brand_role
 
 brand_bp = Blueprint('brand', __name__, url_prefix='/brand')
@@ -249,6 +249,112 @@ def remove_member(membership_id):
     db.session.commit()
 
     return jsonify({'success': True, 'message': 'Member removed'})
+
+
+# ============================================================================
+# Invitations
+# ============================================================================
+
+@brand_bp.route('/api/invitations', methods=['GET'])
+@login_required
+@require_brand_role('admin')
+def list_invitations():
+    """List pending invitations for the current brand."""
+    brand = g.current_brand
+    invitations = BrandInvitation.query.filter_by(brand_id=brand.id).order_by(
+        BrandInvitation.created_at.desc()
+    ).all()
+    return jsonify({'success': True, 'invitations': [i.to_dict() for i in invitations]})
+
+
+@brand_bp.route('/api/invitations', methods=['POST'])
+@login_required
+@require_brand_role('admin')
+def create_invitation():
+    """Send an email invitation to join the current brand."""
+    from app.services.email_service import send_invitation_email
+
+    brand = g.current_brand
+    data = request.get_json()
+
+    email = (data.get('email') or '').strip().lower()
+    role = data.get('role', 'member')
+
+    if not email or '@' not in email:
+        return jsonify({'error': 'A valid email address is required'}), 400
+    if role not in ('viewer', 'member', 'admin'):
+        return jsonify({'error': 'Invalid role. Use viewer, member, or admin.'}), 400
+
+    # Check if the email is already a member
+    existing_user = User.query.filter_by(email=email).first()
+    if existing_user:
+        existing_membership = BrandMembership.query.filter_by(
+            user_id=existing_user.id, brand_id=brand.id
+        ).first()
+        if existing_membership:
+            return jsonify({'error': 'This user is already a member of this brand'}), 409
+
+    # Check for pending invitation to same email + brand
+    pending = BrandInvitation.query.filter_by(
+        brand_id=brand.id, email=email, status='pending'
+    ).first()
+    if pending and not pending.is_expired:
+        return jsonify({'error': 'An invitation has already been sent to this email'}), 409
+
+    # Expire stale ones
+    if pending and pending.is_expired:
+        pending.status = 'expired'
+
+    # Create invitation
+    invitation = BrandInvitation(
+        brand_id=brand.id,
+        email=email,
+        role=role,
+        token=BrandInvitation.generate_token(),
+        invited_by_id=current_user.id,
+        expires_at=datetime.utcnow() + timedelta(days=BrandInvitation.EXPIRY_DAYS),
+    )
+    db.session.add(invitation)
+    db.session.flush()
+
+    # Build accept URL
+    from flask import current_app
+    base_url = current_app.config.get('APP_BASE_URL', request.host_url.rstrip('/'))
+    accept_url = f"{base_url}/invite/{invitation.token}"
+
+    email_sent = send_invitation_email(
+        to_email=email,
+        brand_name=brand.name,
+        invited_by=current_user.username,
+        role=role,
+        accept_url=accept_url,
+    )
+
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'invitation': invitation.to_dict(),
+        'accept_url': accept_url,
+        'email_sent': email_sent,
+    }), 201
+
+
+@brand_bp.route('/api/invitations/<int:invitation_id>', methods=['DELETE'])
+@login_required
+@require_brand_role('admin')
+def revoke_invitation(invitation_id):
+    """Revoke a pending invitation."""
+    brand = g.current_brand
+    invitation = BrandInvitation.query.get_or_404(invitation_id)
+    if invitation.brand_id != brand.id:
+        abort(404)
+    if invitation.status != 'pending':
+        return jsonify({'error': 'Only pending invitations can be revoked'}), 400
+
+    invitation.status = 'revoked'
+    db.session.commit()
+    return jsonify({'success': True, 'message': 'Invitation revoked'})
 
 
 # ============================================================================
