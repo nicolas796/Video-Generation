@@ -26,16 +26,16 @@ SUBTITLE_STYLES: Dict[str, Dict[str, Any]] = {
         "label": "Clean",
         "description": "White text, thin black outline, bottom-center",
         "ass_style": (
-            "Style: Default,Arial,144,&H00FFFFFF,&H000000FF,"
-            "&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,0,2,60,60,500,1"
+            "Style: Default,Arial,96,&H00FFFFFF,&H000000FF,"
+            "&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,0,2,40,40,500,1"
         ),
     },
     "bold_impact": {
         "label": "Bold Impact",
         "description": "Large uppercase white, thick black stroke, centered",
         "ass_style": (
-            "Style: Default,Impact,186,&H00FFFFFF,&H000000FF,"
-            "&H00000000,&HBE000000,-1,0,0,0,100,100,1,0,1,12,0,2,60,60,500,1"
+            "Style: Default,Impact,124,&H00FFFFFF,&H000000FF,"
+            "&H00000000,&HBE000000,-1,0,0,0,100,100,1,0,1,8,0,2,40,40,500,1"
         ),
         "force_upper": True,
     },
@@ -43,16 +43,16 @@ SUBTITLE_STYLES: Dict[str, Dict[str, Any]] = {
         "label": "Boxed",
         "description": "White text on semi-transparent dark box",
         "ass_style": (
-            "Style: Default,Arial,138,&H00FFFFFF,&H000000FF,"
-            "&H00000000,&HB4000000,0,0,0,0,100,100,0,0,3,0,12,2,60,60,500,1"
+            "Style: Default,Arial,92,&H00FFFFFF,&H000000FF,"
+            "&H00000000,&HB4000000,0,0,0,0,100,100,0,0,3,0,8,2,40,40,500,1"
         ),
     },
     "karaoke": {
         "label": "Karaoke",
         "description": "Word-by-word highlight (yellow on white)",
         "ass_style": (
-            "Style: Default,Arial,156,&H00FFFFFF,&H0000FFFF,"
-            "&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,9,0,2,60,60,500,1"
+            "Style: Default,Arial,104,&H00FFFFFF,&H0000FFFF,"
+            "&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,0,2,40,40,500,1"
         ),
         "word_level": True,
     },
@@ -60,16 +60,16 @@ SUBTITLE_STYLES: Dict[str, Dict[str, Any]] = {
         "label": "Minimal",
         "description": "Small light gray text, bottom-left, no background",
         "ass_style": (
-            "Style: Default,Helvetica,108,&H00CCCCCC,&H000000FF,"
-            "&H00333333,&H00000000,0,0,0,0,100,100,0,0,1,3,0,1,60,60,500,1"
+            "Style: Default,Helvetica,72,&H00CCCCCC,&H000000FF,"
+            "&H00333333,&H00000000,0,0,0,0,100,100,0,0,1,2,0,1,40,40,500,1"
         ),
     },
     "neon_pop": {
         "label": "Neon Pop",
         "description": "Colored text with glow effect, centered",
         "ass_style": (
-            "Style: Default,Arial Black,162,&H0000FFFF,&H000000FF,"
-            "&H00FF00FF,&H80000000,-1,0,0,0,100,100,0,0,1,12,6,2,60,60,500,1"
+            "Style: Default,Arial Black,108,&H0000FFFF,&H000000FF,"
+            "&H00FF00FF,&H80000000,-1,0,0,0,100,100,0,0,1,8,4,2,40,40,500,1"
         ),
     },
 }
