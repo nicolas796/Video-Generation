@@ -264,7 +264,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="subtitleDisabledHint" class="d-flex align-items-center justify-content-center h-100 text-muted">
+                        <div id="subtitleDisabledHint" class="align-items-center justify-content-center h-100 text-muted" style="display: flex;">
                             <div class="text-center">
                                 <i class="bi bi-chat-square-text" style="font-size: 2.5rem; opacity: 0.3;"></i>
                                 <p class="mt-2 mb-0 small">Enable subtitles to choose a style</p>
@@ -273,6 +273,7 @@
                     </div>
                 </div>
             </div>
+            <div id="renderError" class="alert alert-danger mx-3 mb-0 d-none" role="alert"></div>
             <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button type="button" class="btn btn-success" onclick="startRender()"><i class="bi bi-play-fill me-1"></i>Start Render</button></div>
         </div>
     </div>
@@ -491,12 +492,18 @@ function selectSubtitleStyle(style) {
 
 async function startRender() {
     const modalBtn = document.querySelector('#renderModal .btn-success');
-    if (modalBtn) modalBtn.disabled = true;
-    toggleButtonLoading('renderBtn', true, 'Starting...');
-
-    const subtitlesEnabled = document.getElementById('enableSubtitles').checked;
+    const errorBox = document.getElementById('renderError');
+    if (errorBox) errorBox.classList.add('d-none');
 
     try {
+        if (modalBtn) { modalBtn.disabled = true; modalBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Rendering...'; }
+        toggleButtonLoading('renderBtn', true, 'Starting...');
+
+        const subtitlesEnabled = document.getElementById('enableSubtitles')?.checked || false;
+        const subtitleStyle = subtitlesEnabled ? (selectedSubtitleStyle || 'clean') : null;
+
+        console.log('[Assembly] startRender called', { subtitlesEnabled, subtitleStyle });
+
         const response = await fetch(`/api/use-cases/${useCaseId}/assemble`, {
             method: 'POST',
             headers: {
@@ -508,29 +515,32 @@ async function startRender() {
                 transition: document.getElementById('renderTransitions').value,
                 include_voiceover: document.getElementById('includeVoiceover').checked,
                 transition_duration: document.getElementById('renderTransitions').value === 'cut' ? 0.1 : 0.5,
-                subtitle_style: subtitlesEnabled ? selectedSubtitleStyle : null
+                subtitle_style: subtitleStyle
             })
         });
-        
+
+        console.log('[Assembly] fetch response', response.status);
         const data = await response.json();
+        console.log('[Assembly] response data', data);
+
         if (!response.ok || !data.success) throw new Error(data.error || 'Rendering failed');
-        
-        // Check if async or sync
-        if (data.async && data.task_id) {
-            // Async processing - start polling
-            bootstrap.Modal.getInstance(document.getElementById('renderModal')).hide();
-            showAssemblyProgress(data.task_id, data.poll_url);
-        } else {
-            // Sync processing - immediate completion
-            bootstrap.Modal.getInstance(document.getElementById('renderModal')).hide();
-            alert('Final video ready! Redirecting to output page.');
-            window.location.href = `/output/${useCaseId}`;
-        }
+
+        // Hide render modal, show progress
+        try { bootstrap.Modal.getOrCreateInstance(document.getElementById('renderModal')).hide(); } catch (e) { console.warn('Modal hide failed', e); }
+        showAssemblyProgress(data.task_id, data.poll_url);
+
     } catch (error) {
-        alert(error.message || 'Unable to complete render');
+        console.error('[Assembly] startRender error:', error);
+        // Show error inline in the modal (more visible than alert)
+        if (errorBox) {
+            errorBox.textContent = error.message || 'Unable to start render';
+            errorBox.classList.remove('d-none');
+        } else {
+            alert(error.message || 'Unable to complete render');
+        }
     } finally {
         toggleButtonLoading('renderBtn', false);
-        if (modalBtn) modalBtn.disabled = false;
+        if (modalBtn) { modalBtn.disabled = false; modalBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Start Render'; }
     }
 }
 
