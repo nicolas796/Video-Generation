@@ -2761,6 +2761,7 @@ def get_assembly_data(use_case_id):
     analyzed_count = len([clip for clip in ordered_clips if clip.get('content_description')])
 
     # Enhanced duration status with smart assembly info
+    has_complete = stats.get('is_complete', False) or stats.get('complete', 0) > 0
     if total_duration < target_duration * 0.5:
         duration_status = 'insufficient'
         duration_message = f'Need {(target_duration - total_duration):.1f}s more content ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
@@ -2768,15 +2769,15 @@ def get_assembly_data(use_case_id):
     elif total_duration < target_duration * 0.8:
         duration_status = 'warning'
         duration_message = f'Could use {(target_duration - total_duration):.1f}s more ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
-        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
+        assembly_ready = has_complete
     elif variance > 5:
         duration_status = 'good'
         duration_message = f'{len(ordered_clips)} clips, {total_duration:.1f}s total - AI will select best segments'
-        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
+        assembly_ready = has_complete
     else:
         duration_status = 'success'
         duration_message = f'{len(ordered_clips)} clips, {total_duration:.1f}s total - Ready to assemble'
-        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
+        assembly_ready = has_complete
 
     duration_summary = {
         'current': total_duration,
