@@ -897,9 +897,14 @@ def create_use_case(product_id):
     data = request.get_json()
 
     brand_id = g.current_brand.id if g.get('current_brand') else None
+
+    # Ensure the product belongs to the current brand (tenant isolation)
+    if brand_id and product.brand_id and product.brand_id != brand_id:
+        return jsonify({'error': 'Product does not belong to the current brand'}), 403
+
     use_case = UseCase(
         product_id=product_id,
-        brand_id=brand_id,
+        brand_id=product.brand_id or brand_id,
         name=data.get('name', 'New Use Case'),
         format=data.get('format', '9:16'),
         style=data.get('style', 'realistic'),

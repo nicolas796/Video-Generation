@@ -172,6 +172,12 @@ def upgrade():
             "INSERT INTO brands (id, name, slug, created_at, updated_at) "
             "VALUES (1, 'Default', 'default', NOW(), NOW())"
         )
+        # Advance the sequence past the manually-inserted id so the next
+        # normal INSERT doesn't collide with id=1.
+        op.execute(
+            "SELECT setval(pg_get_serial_sequence('brands', 'id'), "
+            "COALESCE((SELECT MAX(id) FROM brands), 1))"
+        )
 
     # Assign all existing users as owners of the Default brand (skip if already assigned)
     op.execute(
