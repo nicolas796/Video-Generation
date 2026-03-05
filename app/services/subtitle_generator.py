@@ -13,7 +13,13 @@ from typing import Any, Dict, List, Optional, Tuple
 #   Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR,
 #   MarginV, Encoding
 # Colours use &HAABBGGRR (ASS format — note BGR, not RGB).
+#
+# Size-dependent fields (Fontsize, Outline, Shadow, MarginL/R/V) are
+# authored for a **1920 px reference height** and scaled at render time
+# by _scale_ass_style() so subtitles look correct on every aspect ratio.
 # ---------------------------------------------------------------------------
+
+_REF_HEIGHT = 1920  # reference height the style values below target
 
 SUBTITLE_STYLES: Dict[str, Dict[str, Any]] = {
     "clean": {
@@ -69,6 +75,35 @@ SUBTITLE_STYLES: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _scale_ass_style(style_line: str, video_height: int) -> str:
+    """Scale size-dependent ASS style fields from _REF_HEIGHT to *video_height*.
+
+    ASS field order (after ``Style: Name,``):
+      0  Fontname        6  BackColour     12 ScaleY    18 Alignment
+      1  Fontsize  *     7  Bold           13 Spacing   19 MarginL  *
+      2  PrimaryColour   8  Italic         14 Angle     20 MarginR  *
+      3  SecondaryColour  9  Underline     15 BorderStyle 21 MarginV *
+      4  OutlineColour   10 StrikeOut      16 Outline  *  22 Encoding
+      5  BackColour      11 ScaleX         17 Shadow   *
+
+    Fields marked * are scaled proportionally.
+    """
+    if video_height == _REF_HEIGHT:
+        return style_line
+
+    scale = video_height / _REF_HEIGHT
+
+    prefix, fields_str = style_line.split(",", 1)  # "Style: Default" , rest
+    fields = [f.strip() for f in fields_str.split(",")]
+
+    # indices of size-dependent fields (0-based within fields list)
+    # Fontsize=idx 1, Outline=idx 16, Shadow=idx 17, MarginL=19, MarginR=20, MarginV=21
+    for idx in (1, 16, 17, 19, 20, 21):
+        fields[idx] = str(max(1, round(int(fields[idx]) * scale)))
+
+    return prefix + "," + ",".join(fields)
+
+
 class SubtitleGenerator:
     """Generate ASS subtitle files from script text and audio timing."""
 
@@ -122,8 +157,9 @@ class SubtitleGenerator:
         else:
             events = self._build_events(timed, style_def)
 
+        scaled_style = _scale_ass_style(style_def["ass_style"], video_height)
         ass_content = self._render_ass(
-            style_def["ass_style"], events, video_width, video_height
+            scaled_style, events, video_width, video_height
         )
 
         os.makedirs(output_dir, exist_ok=True)
