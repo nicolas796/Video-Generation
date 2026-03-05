@@ -354,10 +354,18 @@ let assemblyReady = false;
 
 function updateButtons() {
     const complete = analysisSummary.complete || 0, analyzed = analysisSummary.analyzed || 0;
-    document.getElementById('analyzeBtn').disabled = complete === 0; 
+    document.getElementById('analyzeBtn').disabled = complete === 0;
     document.getElementById('autoOrderBtn').disabled = analyzed === 0;
-    document.getElementById('optimizeBtn').disabled = analyzed === 0; 
-    document.getElementById('renderBtn').disabled = !assemblyReady;
+    document.getElementById('optimizeBtn').disabled = analyzed === 0;
+    const renderBtn = document.getElementById('renderBtn');
+    renderBtn.disabled = !assemblyReady;
+    if (!assemblyReady && clipsData.length === 0) {
+        renderBtn.title = 'No clips available — generate clips first';
+    } else if (!assemblyReady) {
+        renderBtn.title = 'Waiting for clips to finish generating';
+    } else {
+        renderBtn.title = '';
+    }
 }
 
 function renderTimeline() {
