@@ -129,6 +129,11 @@ class Config:
         os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     )
     
+    # Email (SendGrid)
+    SENDGRID_API_KEY = os.getenv('SENDGRID_API_KEY', '')
+    SENDGRID_FROM_EMAIL = os.getenv('SENDGRID_FROM_EMAIL', 'noreply@example.com')
+    SENDGRID_FROM_NAME = os.getenv('SENDGRID_FROM_NAME', 'Video Generator')
+
     # ElevenLabs default voice
     DEFAULT_VOICE_ID = os.getenv('DEFAULT_VOICE_ID', 'XB0fDUnXU5powFXDhCwa')
 
