@@ -504,9 +504,10 @@ class VideoClipManager:
             recommended = self.pollo_client.get_models_for_style(use_case.style or 'realistic')
             model = recommended[0] if recommended else 'pollo-1.6'
         
-        # Create clip record
+        # Create clip record (inherit brand from use case)
         clip = VideoClip(
             use_case_id=use_case_id,
+            brand_id=use_case.brand_id,
             sequence_order=sequence_order,
             prompt=prompt,
             model_used=model,

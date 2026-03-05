@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Usage & Costs - {{ brand.name }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="mb-4"><i class="bi bi-graph-up me-2"></i>{{ brand.name }} — Usage & Costs</h2>
+
+    <!-- Period Selector -->
+    <div class="mb-4">
+        <div class="btn-group" role="group">
+            <button class="btn btn-outline-primary active" onclick="loadUsage(7)">7 Days</button>
+            <button class="btn btn-outline-primary" onclick="loadUsage(30)">30 Days</button>
+            <button class="btn btn-outline-primary" onclick="loadUsage(90)">90 Days</button>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="card shadow-sm border-0">
+                <div class="card-body text-center">
+                    <h6 class="text-muted">Total Cost</h6>
+                    <h3 id="totalCost" class="text-primary">$0.00</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm border-0">
+                <div class="card-body text-center">
+                    <h6 class="text-muted">Products</h6>
+                    <h3 id="productCount">0</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm border-0">
+                <div class="card-body text-center">
+                    <h6 class="text-muted">Video Clips</h6>
+                    <h3 id="clipCount">0</h3>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card shadow-sm border-0">
+                <div class="card-body text-center">
+                    <h6 class="text-muted">Final Videos</h6>
+                    <h3 id="videoCount">0</h3>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cost by Service -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-6">
+            <div class="card shadow-sm">
+                <div class="card-header"><h5 class="mb-0">Cost by Service</h5></div>
+                <div class="card-body">
+                    <div id="serviceBreakdown"><p class="text-muted">Loading...</p></div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="card shadow-sm">
+                <div class="card-header"><h5 class="mb-0">Recent Activity</h5></div>
+                <div class="card-body" style="max-height: 300px; overflow-y: auto;">
+                    <div id="recentActivity"><p class="text-muted">Loading...</p></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function loadUsage(days) {
+    // Update active button
+    document.querySelectorAll('.btn-group .btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+
+    fetch(`/brand/api/usage?days=${days}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+
+            document.getElementById('totalCost').textContent = `$${data.total_cost_usd.toFixed(2)}`;
+            document.getElementById('productCount').textContent = data.resource_counts.products;
+            document.getElementById('clipCount').textContent = data.resource_counts.video_clips;
+            document.getElementById('videoCount').textContent = data.resource_counts.final_videos;
+
+            // Service breakdown
+            const services = data.by_service;
+            const serviceKeys = Object.keys(services);
+            if (serviceKeys.length === 0) {
+                document.getElementById('serviceBreakdown').innerHTML = '<p class="text-muted">No usage recorded yet.</p>';
+            } else {
+                document.getElementById('serviceBreakdown').innerHTML = `
+                    <table class="table table-sm">
+                        <thead><tr><th>Service</th><th>Calls</th><th>Cost</th></tr></thead>
+                        <tbody>${serviceKeys.map(s => `
+                            <tr>
+                                <td><span class="badge bg-info">${s}</span></td>
+                                <td>${services[s].count}</td>
+                                <td>$${services[s].total_cost.toFixed(4)}</td>
+                            </tr>
+                        `).join('')}</tbody>
+                    </table>`;
+            }
+
+            // Recent activity
+            if (data.recent_records.length === 0) {
+                document.getElementById('recentActivity').innerHTML = '<p class="text-muted">No recent activity.</p>';
+            } else {
+                document.getElementById('recentActivity').innerHTML = data.recent_records.slice(0, 20).map(r => `
+                    <div class="d-flex justify-content-between align-items-center border-bottom py-2">
+                        <div>
+                            <strong>${r.service}</strong> — ${r.operation}
+                            <br><small class="text-muted">${new Date(r.created_at).toLocaleString()}</small>
+                        </div>
+                        <span class="badge bg-secondary">$${(r.estimated_cost_usd || 0).toFixed(4)}</span>
+                    </div>
+                `).join('');
+            }
+        });
+}
+
+document.addEventListener('DOMContentLoaded', () => loadUsage(30));
+</script>
+{% endblock %}

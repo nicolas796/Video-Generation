@@ -5,7 +5,7 @@ import click
 from flask.cli import with_appcontext
 
 from app import db
-from app.models import User, VideoClip
+from app.models import User, VideoClip, Brand, BrandMembership
 from app.auth import create_admin_user
 
 
@@ -176,9 +176,99 @@ def migrate_clip_filenames_command():
         raise click.Abort()
 
 
+@click.command('create-brand')
+@click.option('--name', '-n', required=True, help='Brand name')
+@click.option('--owner', '-o', required=True, help='Username of the brand owner')
+@with_appcontext
+def create_brand_command(name, owner):
+    """Create a new brand and assign an owner."""
+    user = User.query.filter_by(username=owner).first()
+    if not user:
+        click.echo(click.style(f'User "{owner}" not found', fg='red'))
+        raise click.Abort()
+
+    slug = Brand.slugify(name)
+    existing = Brand.query.filter_by(slug=slug).first()
+    if existing:
+        click.echo(click.style(f'Brand "{name}" (slug: {slug}) already exists', fg='red'))
+        raise click.Abort()
+
+    brand = Brand(name=name, slug=slug)
+    db.session.add(brand)
+    db.session.flush()
+
+    membership = BrandMembership(user_id=user.id, brand_id=brand.id, role='owner')
+    db.session.add(membership)
+    db.session.commit()
+
+    click.echo(click.style(f'Brand "{name}" created (id={brand.id}, slug={slug})', fg='green'))
+    click.echo(f'  Owner: {owner}')
+
+
+@click.command('list-brands')
+@with_appcontext
+def list_brands_command():
+    """List all brands."""
+    brands = Brand.query.all()
+    if not brands:
+        click.echo('No brands found.')
+        return
+
+    click.echo(f'Found {len(brands)} brand(s):')
+    click.echo('')
+    click.echo(f'{"ID":<5} {"Name":<25} {"Slug":<25} {"Members":<10}')
+    click.echo('-' * 70)
+
+    for brand in brands:
+        member_count = BrandMembership.query.filter_by(brand_id=brand.id).count()
+        click.echo(f'{brand.id:<5} {brand.name:<25} {brand.slug:<25} {member_count:<10}')
+
+
+@click.command('add-brand-member')
+@click.option('--brand', '-b', required=True, help='Brand slug or ID')
+@click.option('--username', '-u', required=True, help='Username to add')
+@click.option('--role', '-r', default='member', help='Role: owner, admin, member, viewer')
+@with_appcontext
+def add_brand_member_command(brand, username, role):
+    """Add a user to a brand."""
+    if role not in ('owner', 'admin', 'member', 'viewer'):
+        click.echo(click.style(f'Invalid role: {role}', fg='red'))
+        raise click.Abort()
+
+    # Find brand by slug or ID
+    brand_obj = Brand.query.filter_by(slug=brand).first()
+    if not brand_obj:
+        try:
+            brand_obj = db.session.get(Brand, int(brand))
+        except ValueError:
+            pass
+    if not brand_obj:
+        click.echo(click.style(f'Brand "{brand}" not found', fg='red'))
+        raise click.Abort()
+
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        click.echo(click.style(f'User "{username}" not found', fg='red'))
+        raise click.Abort()
+
+    existing = BrandMembership.query.filter_by(user_id=user.id, brand_id=brand_obj.id).first()
+    if existing:
+        existing.role = role
+        db.session.commit()
+        click.echo(click.style(f'Updated {username} role to "{role}" on brand "{brand_obj.name}"', fg='yellow'))
+    else:
+        membership = BrandMembership(user_id=user.id, brand_id=brand_obj.id, role=role)
+        db.session.add(membership)
+        db.session.commit()
+        click.echo(click.style(f'Added {username} as "{role}" to brand "{brand_obj.name}"', fg='green'))
+
+
 def init_cli(app):
     """Register CLI commands with the Flask app."""
     app.cli.add_command(create_admin_command)
     app.cli.add_command(list_users_command)
     app.cli.add_command(reset_password_command)
     app.cli.add_command(migrate_clip_filenames_command)
+    app.cli.add_command(create_brand_command)
+    app.cli.add_command(list_brands_command)
+    app.cli.add_command(add_brand_member_command)

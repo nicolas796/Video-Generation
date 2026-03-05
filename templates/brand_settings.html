@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+
+{% block title %}Brand Settings - {{ brand.name }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <h2 class="mb-4"><i class="bi bi-gear me-2"></i>{{ brand.name }} — Settings</h2>
+
+    <div class="row">
+        <!-- Brand Info -->
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header"><h5 class="mb-0">Brand Details</h5></div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Brand Name</label>
+                        <input type="text" class="form-control" id="brandName" value="{{ brand.name }}" {% if not is_admin %}disabled{% endif %}>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Slug</label>
+                        <input type="text" class="form-control" value="{{ brand.slug }}" disabled>
+                    </div>
+                    {% if is_admin %}
+                    <button class="btn btn-primary" onclick="saveBrandSettings()">Save Changes</button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- API Keys -->
+        <div class="col-md-6 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header"><h5 class="mb-0">API Keys (Brand-Specific)</h5></div>
+                <div class="card-body">
+                    <p class="text-muted small">Leave blank to use global API keys.</p>
+                    <div class="mb-3">
+                        <label class="form-label">Pollo API Key</label>
+                        <input type="password" class="form-control" id="polloKey"
+                               placeholder="{{ 'Set' if brand.pollo_api_key else 'Not set (using global)' }}"
+                               {% if not is_admin %}disabled{% endif %}>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">ElevenLabs API Key</label>
+                        <input type="password" class="form-control" id="elevenlabsKey"
+                               placeholder="{{ 'Set' if brand.elevenlabs_api_key else 'Not set (using global)' }}"
+                               {% if not is_admin %}disabled{% endif %}>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">OpenAI API Key</label>
+                        <input type="password" class="form-control" id="openaiKey"
+                               placeholder="{{ 'Set' if brand.openai_api_key else 'Not set (using global)' }}"
+                               {% if not is_admin %}disabled{% endif %}>
+                    </div>
+                    {% if is_admin %}
+                    <button class="btn btn-primary" onclick="saveApiKeys()">Save API Keys</button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Members -->
+        <div class="col-md-12 mb-4">
+            <div class="card shadow-sm">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">Team Members</h5>
+                    {% if is_admin %}
+                    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addMemberModal">
+                        <i class="bi bi-person-plus me-1"></i>Add Member
+                    </button>
+                    {% endif %}
+                </div>
+                <div class="card-body">
+                    <div id="membersList">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Member Modal -->
+<div class="modal fade" id="addMemberModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Team Member</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">Username</label>
+                    <input type="text" class="form-control" id="newMemberUsername" placeholder="Enter username">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Role</label>
+                    <select class="form-select" id="newMemberRole">
+                        <option value="viewer">Viewer — can view only</option>
+                        <option value="member" selected>Member — can create and edit</option>
+                        <option value="admin">Admin — can manage members and settings</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="addMember()">Add Member</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const csrfToken = document.querySelector('input[name="csrf_token"]')?.value || '';
+
+function loadMembers() {
+    fetch('/brand/api/members')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const container = document.getElementById('membersList');
+            if (!data.members.length) {
+                container.innerHTML = '<p class="text-muted">No members</p>';
+                return;
+            }
+            container.innerHTML = `
+                <table class="table table-sm">
+                    <thead><tr><th>Username</th><th>Role</th><th>Joined</th><th></th></tr></thead>
+                    <tbody>${data.members.map(m => `
+                        <tr>
+                            <td>${m.username || 'Unknown'}</td>
+                            <td><span class="badge bg-${m.role === 'owner' ? 'danger' : m.role === 'admin' ? 'warning' : 'secondary'}">${m.role}</span></td>
+                            <td>${m.created_at ? new Date(m.created_at).toLocaleDateString() : '-'}</td>
+                            <td>
+                                {% if is_admin %}
+                                ${m.role !== 'owner' ? `<button class="btn btn-sm btn-outline-danger" onclick="removeMember(${m.id})"><i class="bi bi-trash"></i></button>` : ''}
+                                {% endif %}
+                            </td>
+                        </tr>
+                    `).join('')}</tbody>
+                </table>`;
+        });
+}
+
+function saveBrandSettings() {
+    fetch('/brand/api/settings', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+        body: JSON.stringify({name: document.getElementById('brandName').value})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) { alert('Settings saved!'); window.location.reload(); }
+        else alert(data.error || 'Failed to save');
+    });
+}
+
+function saveApiKeys() {
+    const payload = {};
+    const polloKey = document.getElementById('polloKey').value;
+    const elevenlabsKey = document.getElementById('elevenlabsKey').value;
+    const openaiKey = document.getElementById('openaiKey').value;
+    if (polloKey) payload.pollo_api_key = polloKey;
+    if (elevenlabsKey) payload.elevenlabs_api_key = elevenlabsKey;
+    if (openaiKey) payload.openai_api_key = openaiKey;
+
+    fetch('/brand/api/settings', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) alert('API keys saved!');
+        else alert(data.error || 'Failed to save');
+    });
+}
+
+function addMember() {
+    const username = document.getElementById('newMemberUsername').value.trim();
+    const role = document.getElementById('newMemberRole').value;
+    if (!username) return alert('Username required');
+
+    fetch('/brand/api/members', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+        body: JSON.stringify({username, role})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            bootstrap.Modal.getInstance(document.getElementById('addMemberModal')).hide();
+            loadMembers();
+        } else {
+            alert(data.error || 'Failed to add member');
+        }
+    });
+}
+
+function removeMember(membershipId) {
+    if (!confirm('Remove this member?')) return;
+    fetch(`/brand/api/members/${membershipId}`, {
+        method: 'DELETE',
+        headers: {'X-CSRFToken': csrfToken}
+    })
+    .then(r => r.json())
+    .then(() => loadMembers());
+}
+
+document.addEventListener('DOMContentLoaded', loadMembers);
+</script>
+{% endblock %}

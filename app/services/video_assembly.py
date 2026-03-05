@@ -206,6 +206,7 @@ class VideoAssembler:
 
             final_video = FinalVideo(
                 use_case_id=use_case.id,
+                brand_id=use_case.brand_id,
                 script_id=script.id if script else None,
                 file_path=rel_path,
                 thumbnail_path=thumbnail_rel,

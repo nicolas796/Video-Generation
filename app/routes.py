@@ -8,11 +8,12 @@ from datetime import datetime
 from typing import Any, Optional, Dict
 
 import requests
-from flask import Blueprint, render_template, jsonify, request, current_app, send_from_directory, url_for, abort
+from flask import Blueprint, render_template, jsonify, request, current_app, send_from_directory, url_for, abort, g
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
-from app.models import Product, UseCase, Script, VideoClip, FinalVideo, ClipLibrary, UseCaseLibraryClip
+from app.models import Product, UseCase, Script, VideoClip, FinalVideo, ClipLibrary, UseCaseLibraryClip, ActivityLog
 from app import db
+from app.brand_context import require_brand, record_usage
 from app.scrapers import scrape_product
 from app.services.script_gen import ScriptGenerator
 from app.services.video_clip_manager import VideoClipManager
@@ -171,6 +172,7 @@ def _verify_pollo_signature(secret: str, provided_signature: Optional[str], raw_
 
 @main_bp.route('/')
 @login_required
+@require_brand
 def index():
     """Home page with pipeline visualization."""
     return render_template('index.html')
@@ -182,8 +184,12 @@ def get_dashboard_status():
     """Get user's dashboard status including active projects and progress."""
     from app.services.pipeline_progress import PipelineProgressTracker
     
-    # Get user's products with their use cases
-    products = Product.query.order_by(Product.created_at.desc()).limit(10).all()
+    # Get brand's products with their use cases
+    brand_id = g.current_brand.id if g.get('current_brand') else None
+    query = Product.query
+    if brand_id:
+        query = query.filter_by(brand_id=brand_id)
+    products = query.order_by(Product.created_at.desc()).limit(10).all()
     
     # Build product progress data
     product_progress = []
@@ -347,11 +353,17 @@ def get_dashboard_status():
             'use_case_name': stage_info['use_case_name']
         })
     
-    # Calculate stats
-    total_products = Product.query.count()
-    total_use_cases = UseCase.query.count()
-    total_clips = VideoClip.query.count()
-    total_final_videos = FinalVideo.query.filter_by(status='complete').count()
+    # Calculate stats (scoped by brand)
+    if brand_id:
+        total_products = Product.query.filter_by(brand_id=brand_id).count()
+        total_use_cases = UseCase.query.filter_by(brand_id=brand_id).count()
+        total_clips = VideoClip.query.filter_by(brand_id=brand_id).count()
+        total_final_videos = FinalVideo.query.filter_by(brand_id=brand_id, status='complete').count()
+    else:
+        total_products = Product.query.count()
+        total_use_cases = UseCase.query.count()
+        total_clips = VideoClip.query.count()
+        total_final_videos = FinalVideo.query.filter_by(status='complete').count()
     
     # Get recent activity (last 5 products)
     recent_products = product_progress[:5]
@@ -391,9 +403,11 @@ def spec_sheet_page(product_id):
 
 @main_bp.route('/products')
 @login_required
+@require_brand
 def products_list_page():
     """Products list UI page."""
-    products = Product.query.order_by(Product.created_at.desc()).all()
+    brand_id = g.current_brand.id
+    products = Product.query.filter_by(brand_id=brand_id).order_by(Product.created_at.desc()).all()
 
     # Enrich with use case count
     products_data = []
@@ -422,21 +436,25 @@ def api_status():
 
 @main_bp.route('/api/products', methods=['GET'])
 @login_required
+@require_brand
 def get_products():
-    """Get all products."""
-    products = Product.query.order_by(Product.created_at.desc()).all()
+    """Get all products for the current brand."""
+    brand_id = g.current_brand.id
+    products = Product.query.filter_by(brand_id=brand_id).order_by(Product.created_at.desc()).all()
     return jsonify([p.to_dict() for p in products])
 
 
 @main_bp.route('/api/products', methods=['POST'])
 @login_required
+@require_brand
 def create_product():
     """Create a new product."""
     data = request.get_json()
     product = Product(
         name=data.get('name'),
         url=data.get('url'),
-        description=data.get('description')
+        description=data.get('description'),
+        brand_id=g.current_brand.id,
     )
     db.session.add(product)
     db.session.commit()
@@ -515,8 +533,12 @@ def scrape_url():
 
     # Save to database if requested
     if save:
-        # Check if product already exists
-        existing = Product.query.filter_by(url=scraped_data['url']).first()
+        brand_id = g.current_brand.id if g.get('current_brand') else None
+        # Check if product already exists (within brand scope)
+        existing_q = Product.query.filter_by(url=scraped_data['url'])
+        if brand_id:
+            existing_q = existing_q.filter_by(brand_id=brand_id)
+        existing = existing_q.first()
         if existing:
             # Update existing product
             existing.name = scraped_data.get('name', existing.name)
@@ -544,7 +566,8 @@ def scrape_url():
                 specifications=scraped_data.get('specifications', {}),
                 reviews=scraped_data.get('reviews', []),
                 scraped_data=scraped_data.get('raw_data', {}),
-                status='scraped'
+                status='scraped',
+                brand_id=brand_id,
             )
             db.session.add(product)
             db.session.commit()
@@ -835,9 +858,11 @@ def use_case_page(product_id):
 @main_bp.route('/api/use-cases', methods=['GET'])
 @login_required
 def get_all_use_cases():
-    """Get all use cases (optionally filtered by product)."""
+    """Get all use cases (optionally filtered by product), scoped by brand."""
     product_id = request.args.get('product_id', type=int)
     query = UseCase.query
+    if g.get('current_brand'):
+        query = query.filter_by(brand_id=g.current_brand.id)
     if product_id:
         query = query.filter_by(product_id=product_id)
     use_cases = query.order_by(UseCase.created_at.desc()).all()
@@ -871,8 +896,10 @@ def create_use_case(product_id):
     product = Product.query.get_or_404(product_id)
     data = request.get_json()
 
+    brand_id = g.current_brand.id if g.get('current_brand') else None
     use_case = UseCase(
         product_id=product_id,
+        brand_id=brand_id,
         name=data.get('name', 'New Use Case'),
         format=data.get('format', '9:16'),
         style=data.get('style', 'realistic'),
@@ -961,7 +988,8 @@ def duplicate_use_case(use_case_id):
 @login_required
 def get_voices():
     """Get available ElevenLabs voices."""
-    api_key = current_app.config.get('ELEVENLABS_API_KEY')
+    from app.brand_context import get_brand_api_key
+    api_key = get_brand_api_key('elevenlabs') or current_app.config.get('ELEVENLABS_API_KEY')
 
     if not api_key:
         # Return default voice list if no API key
@@ -1014,7 +1042,8 @@ def preview_voice():
     if not voice_id:
         return jsonify({'error': 'Voice ID is required'}), 400
 
-    api_key = current_app.config.get('ELEVENLABS_API_KEY')
+    from app.brand_context import get_brand_api_key
+    api_key = get_brand_api_key('elevenlabs') or current_app.config.get('ELEVENLABS_API_KEY')
     if not api_key:
         return jsonify({'error': 'ElevenLabs API key not configured'}), 500
 
@@ -1108,8 +1137,9 @@ def generate_script_route(use_case_id):
     # Check for existing script
     existing_script = Script.query.filter_by(use_case_id=use_case_id).first()
 
-    # Get OpenAI API key
-    api_key = current_app.config.get('OPENAI_API_KEY')
+    # Get OpenAI API key (brand-specific or global)
+    from app.brand_context import get_brand_api_key
+    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY')
     if not api_key:
         return jsonify({'error': 'OPENAI_API_KEY not configured'}), 500
 
@@ -1227,7 +1257,8 @@ def regenerate_script(use_case_id):
     product = Product.query.get_or_404(use_case.product_id)
     existing = Script.query.filter_by(use_case_id=use_case_id).first()
 
-    api_key = current_app.config.get('OPENAI_API_KEY')
+    from app.brand_context import get_brand_api_key
+    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY')
     if not api_key:
         return jsonify({'error': 'OPENAI_API_KEY not configured'}), 500
 
@@ -1355,8 +1386,9 @@ def video_gen_page(use_case_id):
 @login_required
 def get_video_models():
     """Get available video generation models."""
+    from app.brand_context import get_brand_api_key
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         client = PolloAIClient(api_key=api_key)
         models = client.get_available_models()
         return jsonify({'success': True, 'models': models})
@@ -1371,7 +1403,8 @@ def get_video_clips(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
 
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -1487,7 +1520,8 @@ def generate_scene_image(use_case_id):
         import openai
         import time
 
-        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        from app.brand_context import get_brand_api_key
+    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return jsonify({'success': False, 'error': 'OpenAI API key not configured'}), 500
 
@@ -1570,7 +1604,8 @@ def _generate_ai_scene_suggestion(product: Product, script: Optional[Any]) -> st
     try:
         import openai
 
-        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        from app.brand_context import get_brand_api_key
+    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return "Product in lifestyle setting with professional lighting"
 
@@ -1808,7 +1843,8 @@ def _generate_scene_for_clip(use_case, product, script, scene_template, custom_d
 The product "{product_name}" ({product_desc[:80]}) is featured naturally in this scene. Professional photography, photorealistic quality, cinematic composition. No text, no logos, no watermarks. Suitable as a starting frame for video advertisement."""
 
         # Generate image
-        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        from app.brand_context import get_brand_api_key
+    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return {'success': False, 'error': 'OpenAI API key not configured'}
 
@@ -1957,7 +1993,8 @@ def generate_video_clips(use_case_id):
 
     try:
         data = request.get_json() or {}
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2184,6 +2221,7 @@ def upload_video_clip(use_case_id):
         # Create clip record
         clip = VideoClip(
             use_case_id=use_case_id,
+            brand_id=g.current_brand.id if g.get('current_brand') else None,
             sequence_order=existing_clips,
             prompt=f'User uploaded video - {clip_type}',
             model_used='uploaded',
@@ -2197,8 +2235,9 @@ def upload_video_clip(use_case_id):
 
         # Generate thumbnail
         try:
+            from app.brand_context import get_brand_api_key
             manager = VideoClipManager(
-                api_key=current_app.config.get('POLLO_API_KEY'),
+                api_key=get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY'),
                 upload_folder=current_app.config['UPLOAD_FOLDER']
             )
             thumbnail_path = manager._generate_thumbnail(filepath, use_case_id, clip.id)
@@ -2227,7 +2266,8 @@ def check_clip_status(clip_id):
     clip = VideoClip.query.get_or_404(clip_id)
 
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2276,7 +2316,8 @@ def regenerate_video_clip(clip_id):
     data = request.get_json() or {}
 
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2306,7 +2347,8 @@ def test_generate_single_clip():
     script = Script.query.filter_by(use_case_id=use_case_id).first()
 
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2378,7 +2420,8 @@ def test_generate_single_clip():
 def delete_video_clip(clip_id):
     """Delete a video clip."""
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2398,7 +2441,8 @@ def reorder_video_clips(use_case_id):
     clip_orders = data.get('clip_orders', [])
 
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2435,7 +2479,8 @@ def get_generation_stats(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
 
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2459,8 +2504,9 @@ def get_generation_stats(use_case_id):
 @login_required
 def get_pollo_credits():
     """Get Pollo.ai credit balance."""
+    from app.brand_context import get_brand_api_key
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         client = PolloAIClient(api_key=api_key)
         credits = client.get_credit_balance()
         return jsonify(credits)
@@ -2624,7 +2670,8 @@ def update_clip_order(use_case_id):
         if not result.get('success'):
             return jsonify(result), 500
 
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
         clips = manager.get_use_case_clips(use_case_id)
@@ -2670,7 +2717,8 @@ def auto_order_clips(use_case_id):
         if not apply_result.get('success'):
             return jsonify(apply_result), 500
 
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
         clips_response = manager.get_use_case_clips(use_case_id)
@@ -2798,7 +2846,9 @@ def _run_assembly(ctx, app, use_case_id, script_id, options, upload_folder):
             if not video_url and clip.pollo_job_id:
                 try:
                     if pollo_client is None:
-                        pollo_client = PolloAIClient()
+                        from app.brand_context import get_brand_api_key
+                        pollo_key = get_brand_api_key('pollo') or app.config.get('POLLO_API_KEY')
+                        pollo_client = PolloAIClient(api_key=pollo_key)
                     status_result = pollo_client.check_job_status(clip.pollo_job_id, clip=clip)
                     if status_result.get('success'):
                         video_url = pollo_client._extract_video_url(status_result.get('result'))
@@ -2841,8 +2891,11 @@ def _run_assembly(ctx, app, use_case_id, script_id, options, upload_folder):
         voiceover_path = options.get('voiceover_path')
         include_voiceover = options.get('include_voiceover', True)
         if include_voiceover and not voiceover_path:
+            # Use brand-specific API key if available
+            from app.brand_context import get_brand_api_key
+            elevenlabs_key = get_brand_api_key('elevenlabs') or app.config.get('ELEVENLABS_API_KEY')
             generator = VoiceoverGenerator(
-                api_key=app.config.get('ELEVENLABS_API_KEY'),
+                api_key=elevenlabs_key,
                 upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
             voiceover_result = generator.generate_voiceover(
                 use_case=use_case, script=script,
@@ -3159,7 +3212,8 @@ def retry_failed_clips(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
 
     try:
-        api_key = current_app.config.get('POLLO_API_KEY')
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -3244,8 +3298,10 @@ def get_library_clips():
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 24))
 
-        # Build query
+        # Build query (scoped by brand)
         query = ClipLibrary.query.filter_by(status='active')
+        if g.get('current_brand'):
+            query = query.filter_by(brand_id=g.current_brand.id)
 
         if content_type:
             query = query.filter_by(content_type=content_type)
@@ -3338,7 +3394,9 @@ def add_to_library():
                     'library_clip_id': existing.id
                 }), 409
 
+            brand_id = g.current_brand.id if g.get('current_brand') else None
             library_clip = ClipLibrary(
+                brand_id=brand_id,
                 original_clip_id=clip.id,
                 original_product_id=product.id if product else None,
                 original_use_case_id=use_case.id if use_case else None,
@@ -3356,7 +3414,9 @@ def add_to_library():
             )
         else:
             # Manual entry (for uploaded videos)
+            brand_id = g.current_brand.id if g.get('current_brand') else None
             library_clip = ClipLibrary(
+                brand_id=brand_id,
                 file_path=data.get('file_path'),
                 thumbnail_path=data.get('thumbnail_path'),
                 name=data.get('name'),
@@ -3543,20 +3603,30 @@ def remove_library_clip_from_use_case(use_case_id, link_id):
 def get_library_stats():
     """Get statistics about the clip library."""
     try:
-        total_clips = ClipLibrary.query.filter_by(status='active').count()
-        favorites = ClipLibrary.query.filter_by(status='active', is_favorite=True).count()
+        base_q = ClipLibrary.query.filter_by(status='active')
+        if g.get('current_brand'):
+            base_q = base_q.filter_by(brand_id=g.current_brand.id)
+
+        total_clips = base_q.count()
+        favorites = base_q.filter_by(is_favorite=True).count()
 
         # Count by content type
-        content_types = db.session.query(
+        ct_q = db.session.query(
             ClipLibrary.content_type,
             db.func.count(ClipLibrary.id)
-        ).filter_by(status='active').group_by(ClipLibrary.content_type).all()
+        ).filter(ClipLibrary.status == 'active')
+        if g.get('current_brand'):
+            ct_q = ct_q.filter(ClipLibrary.brand_id == g.current_brand.id)
+        content_types = ct_q.group_by(ClipLibrary.content_type).all()
 
         # Count by style
-        styles = db.session.query(
+        style_q = db.session.query(
             ClipLibrary.style,
             db.func.count(ClipLibrary.id)
-        ).filter_by(status='active').group_by(ClipLibrary.style).all()
+        ).filter(ClipLibrary.status == 'active')
+        if g.get('current_brand'):
+            style_q = style_q.filter(ClipLibrary.brand_id == g.current_brand.id)
+        styles = style_q.group_by(ClipLibrary.style).all()
 
         return jsonify({
             'success': True,
