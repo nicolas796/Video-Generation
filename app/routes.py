@@ -2921,7 +2921,8 @@ def _run_assembly(ctx, app, use_case_id, script_id, options, upload_folder):
             transition=options.get('transition', 'cut'),
             quality=options.get('quality', 'medium'),
             format_override=options.get('format_override'),
-            transition_duration=float(options.get('transition_duration', 0.5)))
+            transition_duration=float(options.get('transition_duration', 0.5)),
+            subtitle_style=options.get('subtitle_style'))
 
         if not assembly_result.get('success'):
             raise RuntimeError(assembly_result.get('error', 'Assembly failed'))
@@ -2975,6 +2976,7 @@ def assemble_final_video(use_case_id):
         'transition_duration': float(data.get('transition_duration', 0.5)),
         'format_override': data.get('format'),
         'voiceover_path': data.get('voiceover_path'),
+        'subtitle_style': data.get('subtitle_style'),  # None = no subtitles
     }
 
     # Submit to background thread

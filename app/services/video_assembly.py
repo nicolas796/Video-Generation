@@ -61,7 +61,8 @@ class VideoAssembler:
         transition: str = "cut",
         quality: str = "medium",
         format_override: Optional[str] = None,
-        transition_duration: float = 0.5
+        transition_duration: float = 0.5,
+        subtitle_style: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create the final video for a use case."""
         clips = VideoClip.query.filter_by(
@@ -162,6 +163,30 @@ class VideoAssembler:
                     ])
                     video_duration = audio_duration
 
+            # ── Burn subtitles (optional) ─────────────────────────
+            subtitle_ass_path = None
+            if subtitle_style and script and script.content:
+                from app.services.subtitle_generator import SubtitleGenerator
+                sub_gen = SubtitleGenerator(
+                    upload_folder=self.upload_folder,
+                    ffmpeg_path=self.ffmpeg_path,
+                )
+                subtitle_ass_path = sub_gen.generate(
+                    script_text=script.content,
+                    audio_path=audio_path,
+                    output_dir=tmp_dir,
+                    style_name=subtitle_style,
+                    video_width=width,
+                    video_height=height,
+                )
+
+            if subtitle_ass_path and os.path.exists(subtitle_ass_path):
+                subtitled_path = os.path.join(tmp_dir, "subtitled_video.mp4")
+                self._burn_subtitles(
+                    paced_path, subtitle_ass_path, subtitled_path, quality_preset
+                )
+                paced_path = subtitled_path
+
             # Overlay audio and finalize (or just finalize without audio)
             use_case_folder = os.path.join(self.final_folder, str(use_case.id))
             os.makedirs(use_case_folder, exist_ok=True)
@@ -221,7 +246,8 @@ class VideoAssembler:
                     "format": format_key,
                     "transition_duration": transition_duration,
                     "video_duration": video_duration,
-                    "audio_duration": audio_duration
+                    "audio_duration": audio_duration,
+                    "subtitle_style": subtitle_style,
                 },
                 status="complete",
                 completed_at=datetime.utcnow()
@@ -262,6 +288,31 @@ class VideoAssembler:
             }
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # ------------------------------------------------------------------
+    def _burn_subtitles(
+        self,
+        video_path: str,
+        ass_path: str,
+        output_path: str,
+        quality_preset: Dict[str, Any],
+    ) -> None:
+        """Hard-burn an ASS subtitle file onto the video."""
+        # The ass filter needs the path with escaped colons/backslashes
+        escaped = ass_path.replace("\\", "\\\\").replace(":", "\\:")
+        self._run_ffmpeg(
+            [
+                self.ffmpeg_path, "-y",
+                "-i", video_path,
+                "-vf", f"ass='{escaped}'",
+                "-c:v", "libx264",
+                "-preset", quality_preset["preset"],
+                "-crf", str(quality_preset["crf"]),
+                "-an",
+                output_path,
+            ],
+            description="burning subtitles",
+        )
 
     # ------------------------------------------------------------------
     def _normalize_clip(self, clip_path: str, width: int, height: int, tmp_dir: str) -> str:
