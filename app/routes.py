@@ -1521,7 +1521,7 @@ def generate_scene_image(use_case_id):
         import time
 
         from app.brand_context import get_brand_api_key
-    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return jsonify({'success': False, 'error': 'OpenAI API key not configured'}), 500
 
@@ -1605,7 +1605,7 @@ def _generate_ai_scene_suggestion(product: Product, script: Optional[Any]) -> st
         import openai
 
         from app.brand_context import get_brand_api_key
-    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return "Product in lifestyle setting with professional lighting"
 
@@ -1844,7 +1844,7 @@ The product "{product_name}" ({product_desc[:80]}) is featured naturally in this
 
         # Generate image
         from app.brand_context import get_brand_api_key
-    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return {'success': False, 'error': 'OpenAI API key not configured'}
 
