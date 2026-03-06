@@ -302,6 +302,16 @@
                         <label class="config-label"><i class="bi bi-people"></i>Target Audience</label>
                         <input type="text" class="form-control" id="ucAudience" placeholder="e.g., Young professionals aged 25-35">
                     </div>
+
+                    <div class="config-form-group">
+                        <label class="config-label"><i class="bi bi-diagram-3"></i>Generation Mode</label>
+                        <select class="form-select" id="ucGenerationMode">
+                            <option value="balanced">Balanced (recommended)</option>
+                            <option value="product_accuracy">Product Accuracy</option>
+                            <option value="creative_storytelling">Creative Storytelling</option>
+                        </select>
+                        <small class="text-muted">Sets the default storyboard routing strategy for clips.</small>
+                    </div>
                     
                     <!-- Estimated Clips (read-only) -->
                     <div class="config-form-group">
@@ -441,6 +451,7 @@ function renderUseCases() {
                 </div>
                 ${uc.goal ? `<div class="mb-2"><small class="text-muted">CTA:</small><span class="ms-1">${escapeHtml(uc.goal)}</span></div>` : ''}
                 ${uc.target_audience ? `<div class="mb-2"><small class="text-muted">Audience:</small><span class="ms-1">${escapeHtml(uc.target_audience)}</span></div>` : ''}
+                <div class="mb-2"><small class="text-muted">Generation mode:</small><span class="ms-1">${escapeHtml((uc.generation_mode || 'balanced').replaceAll('_', ' '))}</span></div>
                 <div class="d-flex align-items-center">
                     <small class="text-muted">Voice:</small>
                     <span class="ms-2">${uc.voice_id ? `<i class="bi bi-mic-fill text-primary me-1"></i>${escapeHtml(getVoiceName(uc.voice_id))}` : '<span class="text-muted"><i class="bi bi-mic-mute me-1"></i>Not selected</span>'}</span>
@@ -581,6 +592,7 @@ async function saveUseCase() {
         duration_target: parseInt(document.getElementById('ucDuration').value),
         goal: document.getElementById('ucGoal').value,
         target_audience: document.getElementById('ucAudience').value,
+        generation_mode: document.getElementById('ucGenerationMode').value,
         voice_id: document.getElementById('ucVoiceId').value,
         voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.0, use_speaker_boost: true }
     };
@@ -620,6 +632,7 @@ function editUseCase(useCaseId) {
     updateClipEstimate(useCase.duration_target);
     document.getElementById('ucGoal').value = useCase.goal || '';
     document.getElementById('ucAudience').value = useCase.target_audience || '';
+    document.getElementById('ucGenerationMode').value = useCase.generation_mode || 'balanced';
     if (useCase.voice_id) selectVoice(useCase.voice_id);
     createModal.show();
 }
@@ -667,6 +680,7 @@ function resetForm() {
     selectStyle('realistic');
     document.getElementById('durationValue').textContent = '15';
     updateClipEstimate(document.getElementById('ucDuration').value);
+    document.getElementById('ucGenerationMode').value = 'balanced';
     selectedVoiceId = '';
     renderVoiceSelector();
     document.getElementById('voicePreviewSection').classList.add('d-none');
