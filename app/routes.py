@@ -902,6 +902,10 @@ def create_use_case(product_id):
     if brand_id and product.brand_id and product.brand_id != brand_id:
         return jsonify({'error': 'Product does not belong to the current brand'}), 403
 
+    generation_mode = (data.get('generation_mode') or 'balanced').strip().lower().replace(' ', '_')
+    if generation_mode not in {'balanced', 'product_accuracy', 'creative_storytelling'}:
+        generation_mode = 'balanced'
+
     use_case = UseCase(
         product_id=product_id,
         brand_id=product.brand_id or brand_id,
@@ -913,6 +917,8 @@ def create_use_case(product_id):
         duration_target=data.get('duration_target', 15),
         voice_id=data.get('voice_id', ''),
         voice_settings=data.get('voice_settings', {}),
+        generation_mode=generation_mode,
+        clip_strategy_overrides=data.get('clip_strategy_overrides', {}),
         status='configured' if data.get('voice_id') else 'draft'
     )
     use_case.sync_num_clips()
@@ -929,6 +935,9 @@ def update_use_case(use_case_id):
     """Update a use case."""
     use_case = UseCase.query.get_or_404(use_case_id)
     data = request.get_json()
+    generation_mode = (data.get('generation_mode') or use_case.generation_mode or 'balanced').strip().lower().replace(' ', '_')
+    if generation_mode not in {'balanced', 'product_accuracy', 'creative_storytelling'}:
+        generation_mode = use_case.generation_mode or 'balanced'
 
     use_case.name = data.get('name', use_case.name)
     use_case.format = data.get('format', use_case.format)
@@ -938,6 +947,8 @@ def update_use_case(use_case_id):
     use_case.duration_target = data.get('duration_target', use_case.duration_target)
     use_case.voice_id = data.get('voice_id', use_case.voice_id)
     use_case.voice_settings = data.get('voice_settings', use_case.voice_settings)
+    use_case.generation_mode = generation_mode
+    use_case.clip_strategy_overrides = data.get('clip_strategy_overrides', use_case.clip_strategy_overrides or {})
     use_case.sync_num_clips()
 
     # Update status if voice is selected
@@ -974,6 +985,8 @@ def duplicate_use_case(use_case_id):
         duration_target=original.duration_target,
         voice_id=original.voice_id,
         voice_settings=original.voice_settings,
+        generation_mode=original.generation_mode or 'balanced',
+        clip_strategy_overrides=original.clip_strategy_overrides or {},
         num_clips=original.calculated_num_clips,
         status='configured'
     )
@@ -1978,6 +1991,37 @@ Important: No text overlays, no watermarks, no logos visible. Clean professional
     return prompt
 
 
+def _apply_clip_strategy_overrides(clips_config, overrides):
+    """Apply optional per-clip strategy overrides stored on the use case."""
+    if not overrides or not isinstance(overrides, dict):
+        return clips_config
+
+    normalized = []
+    for clip in clips_config:
+        updated = dict(clip)
+        override = overrides.get(str(updated.get('sequence_order')))
+
+        if not isinstance(override, dict):
+            normalized.append(updated)
+            continue
+
+        strategy = override.get('generation_strategy')
+        if strategy in {'kling_product_locked', 'world_model_broll', 'composite_then_kling'}:
+            updated['generation_strategy'] = strategy
+            updated['use_image'] = strategy != 'world_model_broll'
+
+        model_choice = override.get('model_choice')
+        if model_choice:
+            updated['model_choice'] = model_choice
+
+        if 'use_image' in override and isinstance(override.get('use_image'), bool):
+            updated['use_image'] = override.get('use_image')
+
+        normalized.append(updated)
+
+    return normalized
+
+
 @main_bp.route('/api/use-cases/<int:use_case_id>/generate-clips', methods=['POST'])
 @login_required
 def generate_video_clips(use_case_id):
@@ -2029,7 +2073,10 @@ def generate_video_clips(use_case_id):
         # Get scene template and other parameters
         scene_template = data.get('scene_template', 'none')
         custom_description = data.get('custom_description', '')
-        selected_image_url = data.get('selected_image_url')
+        selected_image_url = data.get('selected_image_url') or data.get('generated_scene_url')
+        generation_mode = (data.get('generation_mode') or use_case.generation_mode or 'balanced').strip().lower().replace(' ', '_')
+        if generation_mode not in {'balanced', 'product_accuracy', 'creative_storytelling'}:
+            generation_mode = 'balanced'
 
         # Get scene context for prompt enhancement
         scene_context = _get_scene_context(scene_template, product, script, custom_description)
@@ -2041,8 +2088,35 @@ def generate_video_clips(use_case_id):
             script_content=script.content,
             product=product,
             num_clips=target_clips,
-            scene_context=scene_context
+            scene_context=scene_context,
+            generation_mode=generation_mode
         )
+        clips_config = _apply_clip_strategy_overrides(clips_config, use_case.clip_strategy_overrides)
+
+        # Phase-2 composite preprocess: generate per-clip scene anchors for composite strategy.
+        if scene_template != 'none':
+            for clip_config in clips_config:
+                strategy = clip_config.get('generation_strategy', 'composite_then_kling')
+                if strategy != 'composite_then_kling':
+                    continue
+                if selected_image_url and str(selected_image_url).strip():
+                    clip_config['image_url'] = selected_image_url
+                    clip_config['asset_source'] = 'generated_scene' if data.get('generated_scene_url') else 'product_image'
+                    continue
+
+                generated_scene = _generate_scene_for_clip(
+                    use_case=use_case,
+                    product=product,
+                    script=script,
+                    scene_template=scene_template,
+                    custom_description=custom_description,
+                    upload_folder=upload_folder
+                )
+                if generated_scene.get('success'):
+                    clip_config['image_url'] = generated_scene.get('local_url')
+                    clip_config['asset_source'] = 'composite_generated'
+                else:
+                    clip_config['asset_source'] = 'product_image'
 
         generated_clips = []
         errors = []
@@ -2075,7 +2149,13 @@ def generate_video_clips(use_case_id):
                 clip_configs_for_task.append({
                     'prompt': clip_config['prompt'],
                     'clip_type': clip_config['clip_type'],
-                    'sequence_order': clip_index
+                    'sequence_order': clip_index,
+                    'generation_strategy': clip_config.get('generation_strategy', 'composite_then_kling'),
+                    'model_choice': clip_config.get('model_choice'),
+                    'script_segment': clip_config.get('script_segment', ''),
+                    'use_image': clip_config.get('use_image', True),
+                    'image_url': clip_config.get('image_url') or selected_image_url,
+                    'asset_source': clip_config.get('asset_source', 'product_image')
                 })
 
             current_app.logger.info(f'Queueing {len(clip_configs_for_task)} clips for async generation via Celery')
@@ -2096,7 +2176,9 @@ def generate_video_clips(use_case_id):
                 'task_id': task.id,
                 'message': f'Queued {len(clip_configs_for_task)} clip(s) for generation. Task ID: {task.id}',
                 'count': len(clip_configs_for_task),
-                'status': 'queued'
+                'status': 'queued',
+                'generation_mode': generation_mode,
+                'storyboard_plan': clips_config
             })
 
         # Synchronous generation (one clip at a time to stay within Render timeout)
@@ -2112,7 +2194,7 @@ def generate_video_clips(use_case_id):
         clip_type = clip_config['clip_type']
 
         # Get image URL
-        image_url = selected_image_url
+        image_url = clip_config.get('image_url') or selected_image_url
         if not image_url and product.images:
             if isinstance(product.images, list) and len(product.images) > 0:
                 image_index = clip_index % len(product.images)
@@ -2123,10 +2205,25 @@ def generate_video_clips(use_case_id):
             use_case_id=use_case_id,
             sequence_order=clip_index,
             prompt=prompt,
+            model=clip_config.get('model_choice'),
+            generation_strategy=clip_config.get('generation_strategy', 'composite_then_kling'),
+            asset_source=clip_config.get('asset_source', 'product_image'),
+            script_segment_ref=clip_config.get('script_segment', ''),
+            analysis_metadata={
+                'clip_type': clip_type,
+                'generation_strategy': clip_config.get('generation_strategy', 'composite_then_kling'),
+                'script_segment': clip_config.get('script_segment', ''),
+                'storyboard_source': 'phase1_router'
+            },
             length=5
         )
 
-        result = manager.start_generation(clip.id, image_url=image_url)
+        use_image = bool(clip_config.get('use_image', True))
+        result = manager.start_generation(
+            clip.id,
+            image_url=image_url if use_image else None,
+            allow_auto_image=use_image
+        )
 
         if result.get('success'):
             use_case.status = 'generating'
@@ -2137,10 +2234,15 @@ def generate_video_clips(use_case_id):
                 'clips': [{
                     'clip': clip.to_dict(),
                     'clip_type': clip_type,
+                    'generation_strategy': clip_config.get('generation_strategy', 'composite_then_kling'),
+                    'model_choice': clip_config.get('model_choice'),
+                    'asset_source': clip_config.get('asset_source', 'product_image'),
                     'status': 'started'
                 }],
                 'count': 1,
                 'message': f'Started clip {clip_index + 1} of {target_clips}.',
+                'generation_mode': generation_mode,
+                'storyboard_plan': clips_config
             })
         else:
             return jsonify({
@@ -2153,6 +2255,99 @@ def generate_video_clips(use_case_id):
         import traceback
         current_app.logger.error(f"Error generating clips: {e}\n{traceback.format_exc()}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/use-cases/<int:use_case_id>/storyboard-plan', methods=['POST'])
+@login_required
+def get_storyboard_plan(use_case_id):
+    """Preview clip routing/storyboard plan before generation (Phase 1)."""
+    use_case = UseCase.query.get_or_404(use_case_id)
+    product = Product.query.get_or_404(use_case.product_id)
+    script = Script.query.filter_by(use_case_id=use_case_id).first()
+
+    if not script:
+        return jsonify({'error': 'No script found. Generate a script first.'}), 400
+
+    try:
+        data = request.get_json() or {}
+        from app.brand_context import get_brand_api_key
+        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
+        manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
+
+        scene_template = data.get('scene_template', 'none')
+        custom_description = data.get('custom_description', '')
+        generation_mode = (data.get('generation_mode') or use_case.generation_mode or 'balanced').strip().lower().replace(' ', '_')
+        if generation_mode not in {'balanced', 'product_accuracy', 'creative_storytelling'}:
+            generation_mode = 'balanced'
+        requested_clip_count = data.get('clip_count')
+
+        scene_context = _get_scene_context(scene_template, product, script, custom_description)
+        target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
+        if requested_clip_count is not None:
+            try:
+                requested_clip_count = int(requested_clip_count)
+                target_clips = max(1, min(requested_clip_count, target_clips))
+            except (TypeError, ValueError):
+                pass
+
+        clips_config = manager.generate_clip_prompts(
+            use_case=use_case,
+            script_content=script.content,
+            product=product,
+            num_clips=target_clips,
+            scene_context=scene_context,
+            generation_mode=generation_mode
+        )
+        clips_config = _apply_clip_strategy_overrides(clips_config, use_case.clip_strategy_overrides)
+
+        return jsonify({
+            'success': True,
+            'generation_mode': generation_mode,
+            'target_clips': target_clips,
+            'clip_strategy_overrides': use_case.clip_strategy_overrides or {},
+            'storyboard_plan': clips_config
+        })
+    except Exception as e:
+        import traceback
+        current_app.logger.error(f"Error building storyboard plan: {e}\n{traceback.format_exc()}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@main_bp.route('/api/use-cases/<int:use_case_id>/clip-strategy-overrides', methods=['PUT'])
+@login_required
+def update_clip_strategy_overrides(use_case_id):
+    """Store per-clip routing overrides on a use case."""
+    use_case = UseCase.query.get_or_404(use_case_id)
+    data = request.get_json() or {}
+    overrides = data.get('clip_strategy_overrides', {})
+
+    if not isinstance(overrides, dict):
+        return jsonify({'error': 'clip_strategy_overrides must be an object'}), 400
+
+    allowed_strategies = {'kling_product_locked', 'world_model_broll', 'composite_then_kling'}
+    cleaned = {}
+
+    for key, val in overrides.items():
+        if not isinstance(val, dict):
+            continue
+        strategy = val.get('generation_strategy')
+        if strategy and strategy not in allowed_strategies:
+            return jsonify({'error': f'Invalid generation_strategy for override {key}: {strategy}'}), 400
+        cleaned[str(key)] = {
+            'generation_strategy': strategy,
+            'model_choice': val.get('model_choice'),
+            'use_image': val.get('use_image')
+        }
+
+    use_case.clip_strategy_overrides = cleaned
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'use_case_id': use_case.id,
+        'clip_strategy_overrides': use_case.clip_strategy_overrides or {}
+    })
 
 
 @main_bp.route('/api/use-cases/<int:use_case_id>/upload-video', methods=['POST'])

@@ -29,6 +29,20 @@ with app.app_context():
     )'''))
     db.session.execute(db.text('CREATE UNIQUE INDEX IF NOT EXISTS ix_brand_invitations_token ON brand_invitations (token)'))
     db.session.execute(db.text('CREATE INDEX IF NOT EXISTS ix_brand_invitations_email_brand ON brand_invitations (email, brand_id)'))
+
+    # Storyboard routing schema (idempotent) to prevent runtime 500s if migrations drift
+    db.session.execute(db.text('ALTER TABLE use_cases ADD COLUMN IF NOT EXISTS generation_mode VARCHAR(50)'))
+    db.session.execute(db.text('ALTER TABLE use_cases ADD COLUMN IF NOT EXISTS clip_strategy_overrides JSON'))
+    db.session.execute(db.text("UPDATE use_cases SET generation_mode = \'balanced\' WHERE generation_mode IS NULL"))
+    db.session.execute(db.text("UPDATE use_cases SET clip_strategy_overrides = \'{}\'::json WHERE clip_strategy_overrides IS NULL"))
+
+    db.session.execute(db.text('ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS generation_strategy VARCHAR(50)'))
+    db.session.execute(db.text('ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS asset_source VARCHAR(50)'))
+    db.session.execute(db.text('ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS script_segment_ref TEXT'))
+    db.session.execute(db.text('ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION'))
+    db.session.execute(db.text("UPDATE video_clips SET generation_strategy = \'composite_then_kling\' WHERE generation_strategy IS NULL"))
+    db.session.execute(db.text("UPDATE video_clips SET asset_source = \'product_image\' WHERE asset_source IS NULL"))
+
     db.session.commit()
     print('Schema verified.')
 " 2>&1 || echo "WARNING: Schema fallback failed"
