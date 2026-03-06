@@ -15,12 +15,17 @@ brand_bp = Blueprint('brand', __name__, url_prefix='/brand')
 def _build_accept_invitation_url(token: str) -> str:
     """Build an absolute invitation URL with a safe production host.
 
-    Prefer request host via ``url_for(..., _external=True)`` and only override
-    scheme/host from APP_BASE_URL when it is explicitly configured to a real
-    external origin.
+    Use request host via ``url_for(..., _external=True)`` by default so invite
+    links always point to the same deployed service that generated them.
+
+    APP_BASE_URL override is opt-in (INVITATION_LINK_USE_APP_BASE_URL=true) for
+    setups that intentionally require a different external origin.
     """
     default_url = url_for('auth.accept_invitation', token=token, _external=True)
     configured_base = (current_app.config.get('APP_BASE_URL') or '').strip().rstrip('/')
+    use_configured_base = str(current_app.config.get('INVITATION_LINK_USE_APP_BASE_URL', '')).lower() in {
+        '1', 'true', 'yes',
+    }
 
     # Ignore development placeholder values to avoid sending localhost links in
     # production when APP_BASE_URL is left at the default.
@@ -30,6 +35,8 @@ def _build_accept_invitation_url(token: str) -> str:
         'https://localhost:5000',
         'https://127.0.0.1:5000',
     }
+    if not use_configured_base:
+        return default_url
     if not configured_base or configured_base in placeholder_bases:
         return default_url
 
