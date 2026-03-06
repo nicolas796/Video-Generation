@@ -431,6 +431,8 @@ class UseCase(db.Model):
 
     # Generation settings
     num_clips = db.Column(db.Integer, default=4)  # Number of video clips to generate
+    generation_mode = db.Column(db.String(50), default='balanced')  # balanced, product_accuracy, creative_storytelling
+    clip_strategy_overrides = db.Column(db.JSON, default=dict)  # Optional per-clip routing overrides
     status = db.Column(db.String(50), default='draft')  # draft, configured, generating, complete
     pipeline_state = db.Column(db.JSON, default=dict)  # Tracks per-stage progress for recovery
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -485,6 +487,8 @@ class UseCase(db.Model):
             'voice_id': self.voice_id,
             'voice_settings': self.voice_settings,
             'num_clips': self.num_clips,
+            'generation_mode': self.generation_mode,
+            'clip_strategy_overrides': self.clip_strategy_overrides or {},
             'calculated_num_clips': self.calculated_num_clips,
             'status': self.status,
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -537,6 +541,10 @@ class VideoClip(db.Model):
     # Clip metadata
     sequence_order = db.Column(db.Integer, default=0)  # Position in final video
     prompt = db.Column(db.Text)  # The prompt used to generate this clip
+    generation_strategy = db.Column(db.String(50), default='composite_then_kling')
+    asset_source = db.Column(db.String(50), default='product_image')  # product_image, composite_generated, generated_scene, text_only
+    script_segment_ref = db.Column(db.Text)
+    quality_score = db.Column(db.Float)
 
     # File paths
     file_path = db.Column(db.String(500))
@@ -572,6 +580,10 @@ class VideoClip(db.Model):
             'brand_id': self.brand_id,
             'sequence_order': self.sequence_order,
             'prompt': self.prompt,
+            'generation_strategy': self.generation_strategy,
+            'asset_source': self.asset_source,
+            'script_segment_ref': self.script_segment_ref,
+            'quality_score': self.quality_score,
             'file_path': self.file_path,
             'thumbnail_path': self.thumbnail_path,
             'pollo_job_id': self.pollo_job_id,
