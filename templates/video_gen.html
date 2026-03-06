@@ -615,6 +615,16 @@
                         <span id="maxClipsLabel">{{ use_case.num_clips or 4 }} clips max</span>
                     </div>
                 </div>
+
+                <div class="mb-4 p-3 bg-light rounded">
+                    <label class="form-label fw-medium">Generation Mode</label>
+                    <select class="form-select" id="generationModeSelect">
+                        <option value="balanced" {% if (use_case.generation_mode or 'balanced') == 'balanced' %}selected{% endif %}>Balanced (recommended)</option>
+                        <option value="product_accuracy" {% if use_case.generation_mode == 'product_accuracy' %}selected{% endif %}>Product Accuracy</option>
+                        <option value="creative_storytelling" {% if use_case.generation_mode == 'creative_storytelling' %}selected{% endif %}>Creative Storytelling</option>
+                    </select>
+                    <small class="text-muted">Controls default clip routing before storyboard overrides.</small>
+                </div>
                 
                 <!-- Step 1: Select Product Image -->
                 <div class="mb-4">
@@ -750,6 +760,17 @@
                     <label class="form-label fw-medium">3. Custom Details (optional)</label>
                     <textarea class="form-control" id="sceneDescription" rows="2" placeholder="Add specific details like 'morning light', 'held by woman', etc."></textarea>
                 </div>
+
+                <div class="mb-2">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <label class="form-label fw-medium mb-0">Storyboard Plan Preview</label>
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="previewStoryboardBtn" onclick="previewStoryboardPlan()">
+                            <i class="bi bi-diagram-3 me-1"></i>Preview Plan
+                        </button>
+                    </div>
+                    <small class="text-muted">Preview and optionally override strategy/model per clip before generation.</small>
+                </div>
+                <div id="storyboardPreview" class="border rounded p-2 d-none" style="max-height: 220px; overflow-y: auto;"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -1120,9 +1141,160 @@ function updateStats(stats) {
 
 let selectedImageUrl = null;
 let availableImages = [];
+let storyboardPlan = [];
+
+function getGenerationMode() {
+    const select = document.getElementById('generationModeSelect');
+    return select ? select.value : 'balanced';
+}
+
+function renderStoryboardPreview(plan = []) {
+    const container = document.getElementById('storyboardPreview');
+    if (!container) return;
+
+    if (!Array.isArray(plan) || plan.length === 0) {
+        container.classList.add('d-none');
+        container.innerHTML = '';
+        return;
+    }
+
+    const strategyOptions = [
+        { value: 'composite_then_kling', label: 'Composite + Kling' },
+        { value: 'kling_product_locked', label: 'Product Locked (Kling)' },
+        { value: 'world_model_broll', label: 'World Model B-roll' }
+    ];
+
+    container.innerHTML = plan.map(clip => {
+        const seq = clip.sequence_order ?? 0;
+        const strategy = clip.generation_strategy || 'composite_then_kling';
+        const modelChoice = clip.model_choice || '';
+        const useImage = clip.use_image !== false;
+        const strategySelect = strategyOptions.map(opt =>
+            `<option value="${opt.value}" ${opt.value === strategy ? 'selected' : ''}>${opt.label}</option>`
+        ).join('');
+
+        return `
+            <div class="border rounded p-2 mb-2 bg-white">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div><strong>Clip ${seq + 1}</strong> · <span class="text-muted">${(clip.clip_type || 'scene').replaceAll('_', ' ')}</span></div>
+                    <span class="badge bg-light text-dark">${clip.estimated_duration || 5}s</span>
+                </div>
+                <div class="row g-2">
+                    <div class="col-md-5">
+                        <label class="form-label form-label-sm mb-1">Strategy</label>
+                        <select class="form-select form-select-sm" data-seq="${seq}" data-field="generation_strategy" onchange="handleStoryboardOverrideChange(this)">
+                            ${strategySelect}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label form-label-sm mb-1">Model</label>
+                        <input type="text" class="form-control form-control-sm" value="${modelChoice}" data-seq="${seq}" data-field="model_choice" oninput="handleStoryboardOverrideChange(this)" placeholder="auto">
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" ${useImage ? 'checked' : ''} data-seq="${seq}" data-field="use_image" onchange="handleStoryboardOverrideChange(this)">
+                            <label class="form-check-label small">Use image</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="small text-muted mt-2" title="${clip.prompt || ''}">${(clip.prompt || '').slice(0, 140)}${(clip.prompt || '').length > 140 ? '…' : ''}</div>
+            </div>
+        `;
+    }).join('');
+    container.classList.remove('d-none');
+}
+
+function handleStoryboardOverrideChange(inputEl) {
+    const seq = Number(inputEl.dataset.seq);
+    const field = inputEl.dataset.field;
+    const clip = storyboardPlan.find(c => (c.sequence_order ?? 0) === seq);
+    if (!clip || !field) return;
+
+    let value;
+    if (inputEl.type === 'checkbox') {
+        value = !!inputEl.checked;
+    } else {
+        value = inputEl.value;
+    }
+    clip[field] = value;
+
+    if (field === 'generation_strategy') {
+        clip.use_image = value !== 'world_model_broll';
+        const checkbox = document.querySelector(`input[data-seq="${seq}"][data-field="use_image"]`);
+        if (checkbox) checkbox.checked = clip.use_image;
+    }
+}
+
+async function previewStoryboardPlan() {
+    const clipCount = getClipCountToGenerate();
+    const customDescription = document.getElementById('sceneDescription').value.trim();
+    const generationMode = getGenerationMode();
+
+    const previewBtn = document.getElementById('previewStoryboardBtn');
+    if (previewBtn) {
+        previewBtn.disabled = true;
+        previewBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Loading...';
+    }
+
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/storyboard-plan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+            body: JSON.stringify({
+                scene_template: selectedSceneTemplate,
+                custom_description: customDescription,
+                generation_mode: generationMode,
+                clip_count: clipCount
+            })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to preview storyboard');
+        }
+        storyboardPlan = (data.storyboard_plan || []).slice(0, clipCount);
+        renderStoryboardPreview(storyboardPlan);
+        showToast('Storyboard plan loaded', 'success');
+    } catch (error) {
+        console.error('Error previewing storyboard:', error);
+        showToast(`Storyboard preview failed: ${error.message}`, 'error');
+    } finally {
+        if (previewBtn) {
+            previewBtn.disabled = false;
+            previewBtn.innerHTML = '<i class="bi bi-diagram-3 me-1"></i>Preview Plan';
+        }
+    }
+}
+
+async function persistStoryboardOverrides() {
+    if (!Array.isArray(storyboardPlan) || storyboardPlan.length === 0) {
+        return;
+    }
+
+    const overrides = {};
+    storyboardPlan.forEach(clip => {
+        const seq = String(clip.sequence_order ?? 0);
+        overrides[seq] = {
+            generation_strategy: clip.generation_strategy,
+            model_choice: clip.model_choice || null,
+            use_image: clip.use_image !== false
+        };
+    });
+
+    const response = await fetch(`/api/use-cases/${useCaseId}/clip-strategy-overrides`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
+        body: JSON.stringify({ clip_strategy_overrides: overrides })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to save storyboard overrides');
+    }
+}
 
 // Open image selection modal when clicking generate
 async function startGeneration() {
+    storyboardPlan = [];
+    renderStoryboardPreview([]);
     // Load product images
     await loadProductImages();
     // Show the modal
@@ -1201,6 +1373,7 @@ function selectImage(imageIndex, cardElement) {
 async function generateVideoClips() {
     const clipCount = getClipCountToGenerate();
     const customDescription = document.getElementById('sceneDescription').value.trim();
+    const generationMode = getGenerationMode();
     
     // Validate that an image is selected
     if (!selectedImageUrl) {
@@ -1211,6 +1384,15 @@ async function generateVideoClips() {
     // Close modal
     const modal = bootstrap.Modal.getInstance(document.getElementById('imageSelectModal'));
     modal.hide();
+
+    try {
+        await persistStoryboardOverrides();
+    } catch (e) {
+        showToast(`Could not save storyboard overrides: ${e.message}`, 'error');
+        document.getElementById('generateSection').classList.remove('d-none');
+        document.getElementById('generatingSection').classList.add('d-none');
+        return;
+    }
     
     // Show generating UI
     document.getElementById('generateSection').classList.add('d-none');
@@ -1228,6 +1410,7 @@ async function generateVideoClips() {
                 selected_image_url: selectedImageUrl,
                 scene_template: selectedSceneTemplate,
                 custom_description: customDescription,
+                generation_mode: generationMode,
                 count: clipCount
             })
         });
@@ -1385,13 +1568,20 @@ async function generateSceneImage() {
     }
 }
 
-function useGeneratedScene() {
+async function useGeneratedScene() {
     if (!generatedSceneUrl) {
         alert('No scene has been generated yet');
         return;
     }
     
     const clipCount = getClipCountToGenerate();
+
+    try {
+        await persistStoryboardOverrides();
+    } catch (e) {
+        showToast(`Could not save storyboard overrides: ${e.message}`, 'error');
+        return;
+    }
     
     // Close modal and start generation with the generated scene
     const modal = bootstrap.Modal.getInstance(document.getElementById('imageSelectModal'));
@@ -1402,6 +1592,7 @@ function useGeneratedScene() {
 }
 
 async function startGenerationWithGeneratedScene(imageUrl, clipCount) {
+    const generationMode = getGenerationMode();
     document.getElementById('generateSection').classList.add('d-none');
     document.getElementById('generatingSection').classList.remove('d-none');
     
@@ -1414,6 +1605,9 @@ async function startGenerationWithGeneratedScene(imageUrl, clipCount) {
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': '{{ csrf_token() }}' },
             body: JSON.stringify({ 
                 generated_scene_url: imageUrl,
+                scene_template: selectedSceneTemplate,
+                custom_description: document.getElementById('sceneDescription').value.trim(),
+                generation_mode: generationMode,
                 count: clipCount
             })
         });
