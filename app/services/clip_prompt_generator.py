@@ -52,7 +52,8 @@ class ClipPromptGenerator:
         script_content: str,
         product_images: List[str],
         num_clips: Optional[int] = None,
-        scene_context: Optional[str] = None
+        scene_context: Optional[str] = None,
+        generation_mode: str = 'balanced'
     ) -> List[Dict[str, Any]]:
         """Generate video prompts for each clip using GPT-4o Vision.
         
@@ -89,6 +90,9 @@ class ClipPromptGenerator:
         for i, clip_type in enumerate(clip_types):
             # Select the best product image for this clip type
             image_path = self._select_image_for_clip(product_images, clip_type, i)
+            generation_strategy = self._assign_generation_strategy(clip_type, generation_mode)
+            model_choice = self._select_model_for_strategy(generation_strategy, getattr(use_case, 'style', 'realistic'))
+            script_segment = script_segments[i] if i < len(script_segments) else ""
             
             if use_ai and self.client:
                 # Generate AI-powered prompt (DISABLED - too slow on Render)
@@ -98,14 +102,19 @@ class ClipPromptGenerator:
                     clip_type=clip_type,
                     clip_index=i,
                     total_clips=num_clips,
-                    script_segment=script_segments[i] if i < len(script_segments) else "",
+                    script_segment=script_segment,
                     full_script=script_content,
                     image_path=image_path
                 )
             else:
                 # Use fast template-based prompts
-                prompt_data = self._fallback_prompt(product, use_case, clip_type, 
-                                                   script_segments[i] if i < len(script_segments) else "")
+                prompt_data = self._fallback_prompt(
+                    product,
+                    use_case,
+                    clip_type,
+                    script_segment,
+                    generation_strategy=generation_strategy
+                )
             
             clips_config.append({
                 'sequence_order': i,
@@ -114,10 +123,47 @@ class ClipPromptGenerator:
                 'motion_direction': prompt_data.get('motion_direction', ''),
                 'mood': prompt_data.get('mood', ''),
                 'estimated_duration': 5,
-                'image_path': image_path
+                'image_path': image_path,
+                'generation_strategy': generation_strategy,
+                'model_choice': model_choice,
+                'script_segment': script_segment,
+                'use_image': generation_strategy != 'world_model_broll',
+                'prompt_components': {
+                    'motion_prompt': prompt_data.get('motion_direction', ''),
+                    'camera_prompt': prompt_data.get('camera_prompt', ''),
+                    'atmosphere_prompt': prompt_data.get('atmosphere_prompt', ''),
+                }
             })
         
         return clips_config
+
+    def _assign_generation_strategy(self, clip_type: str, generation_mode: str = 'balanced') -> str:
+        """Assign a clip generation strategy based on clip role and UX mode."""
+        mode = (generation_mode or 'balanced').lower()
+
+        if mode == 'product_accuracy':
+            return 'composite_then_kling'
+        if mode == 'creative_storytelling':
+            if clip_type in {'problem', 'benefits', 'social_proof'}:
+                return 'world_model_broll'
+            return 'kling_product_locked'
+
+        # balanced (default)
+        if clip_type in {'problem', 'benefits', 'social_proof'}:
+            return 'world_model_broll'
+        if clip_type in {'product_demo', 'product_showcase'}:
+            return 'kling_product_locked'
+        return 'composite_then_kling'
+
+    def _select_model_for_strategy(self, strategy: str, style: str) -> str:
+        """Pick a default model for a strategy with safe fallbacks."""
+        if strategy == 'world_model_broll':
+            if style in {'cinematic', 'realistic'}:
+                return 'sora-2'
+            return 'veo-2'
+        if strategy == 'composite_then_kling':
+            return 'kling-2.1'
+        return 'kling-1.6'
     
     def _determine_clip_types(self, num_clips: int) -> List[str]:
         """Determine the narrative type of each clip in the sequence."""
@@ -447,12 +493,14 @@ Return ONLY the JSON object with visual_prompt, motion_direction, and mood."""
         product: Any,
         use_case: Any,
         clip_type: str,
-        script_segment: str
+        script_segment: str,
+        generation_strategy: str = 'composite_then_kling'
     ) -> Dict[str, str]:
         """Fallback template-based prompt generation."""
         product_name = getattr(product, 'name', 'Product')
         style = getattr(use_case, 'style', 'realistic')
         video_format = getattr(use_case, 'format', '9:16')
+        scene_context = getattr(self, '_scene_context', None)
         
         style_desc = {
             'realistic': 'photorealistic, natural lighting',
@@ -468,22 +516,78 @@ Return ONLY the JSON object with visual_prompt, motion_direction, and mood."""
             '4:5': 'vertical portrait format'
         }.get(video_format, 'vertical format')
         
-        clip_prompts = {
-            'hook': f"The product from the first frame, {product_name}, appears in an eye-catching opening shot. Dynamic camera movement, engaging visual. {style_desc}, {format_desc}",
-            'problem': f"The product from the first frame shown in a scene illustrating the problem that {product_name} solves. Relatable situation, emotional connection. {style_desc}",
-            'solution': f"The product from the first frame beautifully demonstrating how {product_name} solves the problem. Transformation moment. {style_desc}",
-            'benefits': f"The product from the first frame in a lifestyle scene showing satisfaction from using {product_name}. Happy person, aspirational setting. {style_desc}",
-            'social_proof': f"The product from the first frame in a scene with people enjoying {product_name}. Positive atmosphere, community feeling. {style_desc}",
-            'cta': f"The product from the first frame in a strong closing scene, {product_name} front and center. Clear view, memorable final image. {style_desc}",
-            'product_showcase': f"The product from the first frame, {product_name}, in a stunning highlight. Multiple angles, premium quality. {style_desc}",
-            'product_demo': f"The product from the first frame in a step by step demonstration of {product_name} in action. Clear visibility. {style_desc}"
-        }
-        
+        if generation_strategy == 'world_model_broll':
+            visual_prompt = self._build_broll_prompt(clip_type, script_segment, style_desc, format_desc, scene_context)
+            return {
+                'visual_prompt': visual_prompt,
+                'motion_direction': 'gentle parallax and cinematic camera drift',
+                'camera_prompt': 'steady dolly or slider movement with smooth easing',
+                'atmosphere_prompt': f'cinematic ambience, {style_desc}',
+                'mood': 'cinematic and story-driven'
+            }
+
+        visual_prompt = self._build_motion_only_product_prompt(
+            product_name=product_name,
+            clip_type=clip_type,
+            script_segment=script_segment,
+            style_desc=style_desc,
+            format_desc=format_desc,
+            scene_context=scene_context,
+            strategy=generation_strategy
+        )
+
         return {
-            'visual_prompt': clip_prompts.get(clip_type, clip_prompts['product_showcase']),
-            'motion_direction': 'smooth camera movement, professional composition',
-            'mood': 'engaging and professional'
+            'visual_prompt': visual_prompt,
+            'motion_direction': 'slow push-in, subtle orbit, stabilized cinematic framing',
+            'camera_prompt': 'macro-to-medium lens cadence, smooth gimbal movement',
+            'atmosphere_prompt': f'soft commercial lighting, premium texture detail, {style_desc}',
+            'mood': 'premium and product-focused'
         }
+
+    def _build_motion_only_product_prompt(
+        self,
+        product_name: str,
+        clip_type: str,
+        script_segment: str,
+        style_desc: str,
+        format_desc: str,
+        scene_context: Optional[str],
+        strategy: str
+    ) -> str:
+        """Build motion/camera/atmosphere-focused prompts for product-led clips."""
+        beat = {
+            'hook': 'opening beat with confident energy',
+            'solution': 'solution reveal beat',
+            'cta': 'closing beat with purchase intent',
+            'product_demo': 'hands-on usage beat',
+            'product_showcase': 'hero showcase beat'
+        }.get(clip_type, 'product storytelling beat')
+        context_hint = f" Script emphasis: {script_segment}" if script_segment else ''
+        scene_hint = f" Scene anchor context: {scene_context}." if scene_context else ''
+        strategy_hint = 'Use the provided composite frame as the scene anchor.' if strategy == 'composite_then_kling' else 'Use the provided product image as the anchor.'
+        return (
+            f"{strategy_hint} Keep product geometry and branding stable for {product_name}. "
+            f"Focus only on motion, camera path, and atmosphere for a {beat}. "
+            f"Add subtle depth motion and premium lighting shifts. {style_desc}, {format_desc}.{scene_hint}{context_hint}"
+        )
+
+    def _build_broll_prompt(
+        self,
+        clip_type: str,
+        script_segment: str,
+        style_desc: str,
+        format_desc: str,
+        scene_context: Optional[str]
+    ) -> str:
+        """Build text-first narrative prompts for world model b-roll clips."""
+        beat = clip_type.replace('_', ' ')
+        script_hint = f"Narrative cue: {script_segment}." if script_segment else ''
+        scene_hint = f"Scene context: {scene_context}." if scene_context else ''
+        return (
+            f"Cinematic {beat} b-roll scene with expressive environmental action and human context. "
+            f"No explicit product close-up required. Prioritize atmosphere, storytelling transitions, and emotional clarity. "
+            f"{style_desc}, {format_desc}. {scene_hint} {script_hint}".strip()
+        )
 
 
 # Convenience function for direct usage
