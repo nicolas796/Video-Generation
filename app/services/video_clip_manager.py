@@ -210,7 +210,8 @@ class VideoClipManager:
         script_content: str,
         product: Product,
         num_clips: Optional[int] = None,
-        scene_context: Optional[str] = None
+        scene_context: Optional[str] = None,
+        generation_mode: str = 'balanced'
     ) -> List[Dict[str, Any]]:
         """Generate video prompts for each clip using GPT-4o Vision.
         
@@ -244,7 +245,8 @@ class VideoClipManager:
                 script_content=script_content,
                 product_images=product_images,
                 num_clips=num_clips,
-                scene_context=scene_context
+                scene_context=scene_context,
+                generation_mode=generation_mode
             )
             
             self._log_info(f"Generated {len(clips_config)} AI-powered clip prompts", 
@@ -481,7 +483,11 @@ class VideoClipManager:
         sequence_order: int,
         prompt: str,
         model: Optional[str] = None,
-        length: int = 5
+        length: int = 5,
+        analysis_metadata: Optional[Dict[str, Any]] = None,
+        generation_strategy: Optional[str] = None,
+        asset_source: Optional[str] = None,
+        script_segment_ref: Optional[str] = None
     ) -> VideoClip:
         """Create a new video clip record and start generation.
         
@@ -512,6 +518,10 @@ class VideoClipManager:
             prompt=prompt,
             model_used=model,
             duration=length,
+            analysis_metadata=analysis_metadata or {},
+            generation_strategy=generation_strategy or 'composite_then_kling',
+            asset_source=asset_source or 'product_image',
+            script_segment_ref=script_segment_ref,
             status='pending'
         )
         
@@ -556,7 +566,7 @@ class VideoClipManager:
             
             # If no image_url provided, use the original public URLs from the product
             # These are the publicly accessible URLs from the original source (e.g., Shopify CDN)
-            if not image_url:
+            if not image_url and allow_auto_image:
                 product = Product.query.get(use_case.product_id)
                 if product and product.images:
                     # product.images contains the original public URLs from scraping
@@ -567,6 +577,8 @@ class VideoClipManager:
                         self._log_info('Using public product image URL for image-to-video', 
                                      clip_id=clip.id, 
                                      image_url=image_url[:100] + '...' if len(image_url) > 100 else image_url)
+            elif not image_url and not allow_auto_image:
+                self._log_info('Skipping auto image selection for text-first clip generation', clip_id=clip.id)
             
             # Determine aspect ratio from use case format
             # Handle both None and empty string cases
@@ -582,6 +594,9 @@ class VideoClipManager:
             # Removing the background gives AI a clean product cutout to work with
             processed_image_url = None
             if image_url:
+                public_image_url = self._ensure_public_url(image_url)
+                if public_image_url:
+                    image_url = public_image_url
                 processed_image_url = self._prepare_image_for_video(image_url, clip.id)
                 if processed_image_url:
                     # Use the background-removed version (full public URL)
@@ -1084,7 +1099,70 @@ class VideoClipManager:
         clips = VideoClip.query.filter_by(use_case_id=use_case_id).order_by(VideoClip.sequence_order).all()
         if refresh_status:
             self.refresh_generating_clips(clips)
+            self._apply_quality_gate_fallback(clips)
         return [self._enrich_clip_data(clip) for clip in clips]
+
+    def _apply_quality_gate_fallback(self, clips: List[VideoClip]):
+        """Fallback to safer strategy when low-quality clips are detected."""
+        dirty = False
+        for clip in clips:
+            if clip.status != 'complete':
+                continue
+
+            metadata = clip.analysis_metadata or {}
+            quality_score = metadata.get('quality_score')
+            if quality_score is None:
+                quality_score = metadata.get('overall_quality')
+            try:
+                quality_score = float(quality_score) if quality_score is not None else None
+            except (TypeError, ValueError):
+                quality_score = None
+
+            if quality_score is None:
+                continue
+
+            clip.quality_score = quality_score
+            if quality_score >= 5.0:
+                dirty = True
+                continue
+
+            fallback_attempted = bool(metadata.get('strategy_fallback_attempted'))
+            if fallback_attempted:
+                dirty = True
+                continue
+
+            current_strategy = clip.generation_strategy or metadata.get('generation_strategy') or 'composite_then_kling'
+            if current_strategy == 'world_model_broll':
+                metadata['strategy_fallback_attempted'] = True
+                metadata['strategy_fallback_reason'] = 'low_quality_broll_no_auto_retry'
+                clip.analysis_metadata = metadata
+                dirty = True
+                continue
+
+            # Retry once using composite_then_kling hardening
+            metadata['strategy_fallback_attempted'] = True
+            metadata['strategy_fallback_reason'] = f'quality_score_{quality_score}'
+            metadata['generation_strategy'] = 'composite_then_kling'
+            clip.analysis_metadata = metadata
+            clip.generation_strategy = 'composite_then_kling'
+            clip.asset_source = 'composite_generated'
+            clip.model_used = 'kling-2.1'
+            clip.status = 'pending'
+            clip.error_message = None
+            clip.pollo_job_id = None
+            clip.completed_at = None
+            dirty = True
+
+            try:
+                self.start_generation(clip.id, allow_auto_image=True)
+            except Exception as e:
+                self._log_error('Auto fallback regeneration failed', clip_id=clip.id, error=str(e))
+
+        if dirty:
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
     
     def _enrich_clip_data(self, clip: VideoClip) -> Dict[str, Any]:
         """Enrich clip data with additional information."""
