@@ -1,7 +1,7 @@
 """Add use case generation mode and clip strategy overrides
 
 Revision ID: b8d9e0f1a2b3
-Revises: c1d2e3f4a5b6
+Revises: e2f3a4b5c6d7
 Create Date: 2026-03-06 00:00:00.000000
 
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = 'b8d9e0f1a2b3'
-down_revision = 'c1d2e3f4a5b6'
+down_revision = 'e2f3a4b5c6d7'
 branch_labels = None
 depends_on = None
 
