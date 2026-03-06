@@ -73,6 +73,19 @@ def safe_join(basedir, *paths):
         return None
 
 
+
+
+def _get_dalle_size_for_format(video_format: Optional[str]) -> str:
+    """Map use-case video format to the closest DALL-E 3 supported canvas size."""
+    fmt = (video_format or '9:16').strip()
+    portrait_formats = {'9:16', '4:5'}
+    landscape_formats = {'16:9'}
+
+    if fmt in landscape_formats:
+        return '1792x1024'
+    if fmt in portrait_formats:
+        return '1024x1792'
+    return '1024x1024'
 def _extract_nested_value(payload: Any, path: str) -> Optional[Any]:
     """Retrieve a nested value from a dict using dot notation."""
     current = payload
@@ -1560,11 +1573,12 @@ def generate_scene_image(use_case_id):
                                prompt_preview=scene_prompt[:100],
                                template=scene_template)
 
-        # Generate image with DALL-E 3
+        # Generate image with DALL-E 3 at a canvas size aligned to target video format
+        dalle_size = _get_dalle_size_for_format(use_case.format)
         response = client.images.generate(
             model="dall-e-3",
             prompt=scene_prompt,
-            size="1024x1024",  # DALL-E 3 supports 1024x1024, 1024x1792, 1792x1024
+            size=dalle_size,
             quality="standard",
             n=1
         )
@@ -1878,12 +1892,13 @@ The product "{product_name}" ({product_desc[:80]}) is featured naturally in this
         else:
             client = openai.OpenAI(api_key=api_key)
 
-        current_app.logger.info(f'Generating scene image with template: {scene_template}')
+        dalle_size = _get_dalle_size_for_format(use_case.format)
+        current_app.logger.info(f'Generating scene image with template: {scene_template} (video_format={use_case.format}, size={dalle_size})')
 
         response = client.images.generate(
             model="dall-e-3",
             prompt=dalle_prompt,
-            size="1024x1024",
+            size=dalle_size,
             quality="standard",
             n=1
         )
