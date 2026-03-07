@@ -2,7 +2,6 @@
 import os
 import shutil
 import logging
-import cv2
 import requests
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
@@ -10,6 +9,11 @@ from pathlib import Path
 
 from PIL import Image
 from flask import current_app, request
+
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
 
 from app import db
 from app.models import VideoClip, UseCase, Product
@@ -955,6 +959,8 @@ class VideoClipManager:
         Returns:
             Relative path to the thumbnail, or None if failed
         """
+        if cv2 is None:
+            return None
         try:
             # Open video
             cap = cv2.VideoCapture(video_path)

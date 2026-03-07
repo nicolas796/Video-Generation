@@ -3,12 +3,95 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 from openai import OpenAI
 
 from app.utils import api_retry
+
+HOOK_STYLE_RULES: Dict[str, Dict[str, str]] = {
+    "problem-agitation": {
+        "tone": "urgent",
+        "problem_suffix": "Every wasted second bleeds attention and ad spend.",
+        "solution_template": "Here's the fix: {product} {benefit}.",
+        "cta_prefix": "Fix it now:",
+    },
+    "bold-claim": {
+        "tone": "confident",
+        "problem_suffix": "Big promises flop without proof.",
+        "solution_template": "We back it up: {product} {benefit} so the numbers stick.",
+        "cta_prefix": "Prove it yourself:",
+    },
+    "status-quo-flip": {
+        "tone": "contrarian",
+        "problem_suffix": "Playing it safe keeps you invisible.",
+        "solution_template": "Flip it—{product} {benefit} so you stand out on frame one.",
+        "cta_prefix": "Flip the script:",
+    },
+    "specific-outcome": {
+        "tone": "precise",
+        "problem_suffix": "Tiny tweaks decide who wins the feed.",
+        "solution_template": "Dial it in with {product}: {benefit}.",
+        "cta_prefix": "Lock it in:",
+    },
+    "enemy-of-waste": {
+        "tone": "protective",
+        "problem_suffix": "Every lag is money leaking out.",
+        "solution_template": "Take it back—{product} {benefit} before viewers swipe.",
+        "cta_prefix": "Stop the leak:",
+    },
+    "direct-question": {
+        "tone": "conversational",
+        "problem_suffix": "If you hesitated, it's already costing you.",
+        "solution_template": "Answer it with {product}: {benefit}.",
+        "cta_prefix": "Get the answer:",
+    },
+    "provocative": {
+        "tone": "bold",
+        "problem_suffix": "Admitting it first lets you own the upside.",
+        "solution_template": "Here's the truth—{product} {benefit} while everyone else stalls.",
+        "cta_prefix": "Own the win:",
+    },
+    "value-prop": {
+        "tone": "assured",
+        "problem_suffix": "Forget fluff—outcomes are all that matter.",
+        "solution_template": "{product} simply {benefit}.",
+        "cta_prefix": "Claim it:",
+    },
+    "shocking-stat": {
+        "tone": "authoritative",
+        "problem_suffix": "The data doesn't lie about drop-off.",
+        "solution_template": "{product} {benefit} so you're on the right side of the stat.",
+        "cta_prefix": "Beat the metric:",
+    },
+}
+
+DEFAULT_HOOK_RULE = {
+    "tone": "conversational",
+    "problem_suffix": "Viewers feel the drag immediately.",
+    "solution_template": "{product} {benefit} so you stay top-of-feed.",
+    "cta_prefix": "Take a look:",
+}
+
+PAIN_SPEC_KEYS: List[str] = [
+    "Pain",
+    "Pain point",
+    "Problem",
+    "Challenge",
+    "Frustration",
+    "Issue",
+    "Obstacle",
+]
+
+BENEFIT_SPEC_KEYS: List[str] = [
+    "Key benefit",
+    "Benefit",
+    "Outcome",
+    "Result",
+    "Advantage",
+    "Value",
+]
 
 
 class ScriptGenerator:
@@ -43,20 +126,79 @@ class ScriptGenerator:
             logger.error(f"Moonshot API error: {type(e).__name__}: {e}")
             raise
 
+    def _expand_hook_to_script(
+        self,
+        hook: Dict[str, Any],
+        product_data: Dict[str, Any],
+        use_case_config: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        variant = dict((hook or {}).get("variant") or {})
+        hook_text = variant.get("verbal") or variant.get("on_screen") or variant.get("visual")
+        hook_line = self._ensure_sentence(hook_text)
+        if not hook_line:
+            return None
+
+        hook_type = (hook.get("hook_type") or "").lower()
+        rules = HOOK_STYLE_RULES.get(hook_type, DEFAULT_HOOK_RULE)
+        audience = self._resolve_audience(product_data, use_case_config)
+        problem_hint = self._extract_primary_problem(product_data, hook_line)
+        problem_line = self._compose_problem_sentence(problem_hint, audience, rules)
+        benefit_phrase = self._extract_primary_benefit(product_data)
+        benefit_clause = self._format_benefit_clause(benefit_phrase)
+        solution_line = self._compose_solution_sentence(rules, product_data.get("name"), benefit_clause, variant)
+        cta_line = self._format_cta_text(use_case_config.get("goal") or "Tap to learn more", rules.get("cta_prefix"))
+
+        sections = {
+            "hook": hook_line,
+            "problem": problem_line,
+            "solution": solution_line,
+            "cta": cta_line,
+        }
+        script = " ".join(section for section in sections.values() if section).strip()
+        if not script:
+            return None
+
+        return {
+            "success": True,
+            "content": script,
+            "estimated_duration": self._estimate_duration(script),
+            "word_count": len(script.split()),
+            "tone": rules.get("tone", use_case_config.get("style", "conversational")),
+            "generation_prompt": "hook_blueprint",
+            "sections": sections,
+            "hook_context": {
+                "hook_id": hook.get("id"),
+                "hook_type": hook_type or None,
+                "variant_index": hook.get("variant_index"),
+            },
+        }
+
     # ------------------------------------------------------------------
     def generate_script(
         self,
         product_data: Dict[str, Any],
         use_case_config: Dict[str, Any],
         existing_script: Optional[str] = None,
+        *,
+        hook: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Generate a fresh script or reuse offline fallback when API fails."""
 
-        if not self.client:
-            return self._offline_script(product_data, use_case_config)
+        hook_outline = None
+        if hook:
+            hook_outline = self._expand_hook_to_script(hook, product_data, use_case_config)
 
-        system_prompt = self._build_system_prompt(use_case_config)
-        user_prompt = self._build_user_prompt(product_data, use_case_config, existing_script)
+        if not self.client:
+            return hook_outline or self._offline_script(product_data, use_case_config)
+
+        system_prompt = self._build_system_prompt(use_case_config, hook_hint=hook_outline)
+        user_prompt = self._build_user_prompt(
+            product_data,
+            use_case_config,
+            existing_script,
+            hook=hook,
+            hook_hint=hook_outline,
+        )
 
         try:
             response = self._chat_completion(
@@ -68,35 +210,44 @@ class ScriptGenerator:
                 temperature=0.8,
                 max_tokens=500,
             )
-            
+
             # Safely extract content from response
             if not response or not response.choices:
                 raise RuntimeError("API returned empty response or no choices")
-            
+
             message = response.choices[0].message
             if not message or not message.content:
                 raise RuntimeError("API returned empty message content")
-            
+
             raw_content = message.content
             script_content = self._clean_script(raw_content.strip())
-            
+            script_content = self._enforce_hook_line(script_content, hook_outline)
+
             if not script_content:
                 return {"success": False, "error": "Script generation returned empty content after cleaning", "content": None, "estimated_duration": None}
-            
+
             word_count = len(script_content.split())
             estimated_duration = self._estimate_duration(script_content)
-            return {
+            result_payload = {
                 "success": True,
                 "content": script_content,
                 "estimated_duration": estimated_duration,
                 "word_count": word_count,
-                "tone": use_case_config.get("style", "conversational"),
+                "tone": (hook_outline or {}).get("tone", use_case_config.get("style", "conversational")),
                 "generation_prompt": user_prompt,
                 "raw_response": raw_content,
             }
+            if hook_outline:
+                result_payload["hook_context"] = hook_outline.get("hook_context")
+                result_payload["sections"] = hook_outline.get("sections")
+            return result_payload
         except Exception as exc:
             if not self.offline_fallback:
                 return {"success": False, "error": str(exc), "content": None, "estimated_duration": None}
+            if hook_outline:
+                fallback = dict(hook_outline)
+                fallback["warning"] = f"Kimi API failed: {exc}"
+                return fallback
             fallback = self._offline_script(product_data, use_case_config)
             fallback["warning"] = f"Kimi API failed: {exc}"
             return fallback
@@ -217,8 +368,157 @@ OUTPUT: Only the refined script text."""
             "warning": error,
         }
 
+    def _resolve_audience(self, product_data: Dict[str, Any], use_case_config: Dict[str, Any]) -> str:
+        audience = use_case_config.get("target_audience")
+        specs = product_data.get("specifications") or {}
+        if not audience and isinstance(specs, dict):
+            audience = specs.get("Audience") or specs.get("audience")
+        if not audience:
+            audience = product_data.get("target_audience")
+        return (audience or "creators").strip()
+
+    def _extract_primary_problem(self, product_data: Dict[str, Any], hook_line: str) -> str:
+        specs = product_data.get("specifications") or {}
+        normalized = {}
+        if isinstance(specs, dict):
+            normalized = {str(key).lower(): value for key, value in specs.items()}
+        for key in PAIN_SPEC_KEYS:
+            value = normalized.get(key.lower())
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        description = product_data.get("description") or ""
+        if description:
+            first_sentence = re.split(r"[.!?]", description)[0].strip()
+            if first_sentence:
+                return first_sentence
+        return self._normalize_issue_phrase(hook_line)
+
+    def _extract_primary_benefit(self, product_data: Dict[str, Any]) -> str:
+        specs = product_data.get("specifications") or {}
+        normalized = {}
+        if isinstance(specs, dict):
+            normalized = {str(key).lower(): value for key, value in specs.items()}
+        for key in BENEFIT_SPEC_KEYS:
+            value = normalized.get(key.lower())
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        description = product_data.get("description") or ""
+        if description:
+            sentences = [s.strip() for s in re.split(r"[.!?]", description) if s.strip()]
+            if sentences:
+                return sentences[0]
+        reviews = product_data.get("reviews") or []
+        if isinstance(reviews, list):
+            for review in reviews:
+                if isinstance(review, dict):
+                    text = review.get("text") or review.get("review")
+                    if text:
+                        return text.strip()
+                elif isinstance(review, str) and review.strip():
+                    return review.strip()
+        return "makes results feel effortless"
+
+    def _format_benefit_clause(self, benefit: str) -> str:
+        clause = (benefit or "makes results feel effortless").strip().rstrip('.')
+        if not clause:
+            clause = "makes results feel effortless"
+        if clause and clause[0].isupper():
+            clause = clause[0].lower() + clause[1:]
+        verbs = ("delivers", "gives", "adds", "saves", "keeps", "lets", "makes", "builds", "drives", "proves", "shows")
+        if not clause.lower().startswith(verbs):
+            clause = f"delivers {clause}"
+        return clause
+
+    def _compose_problem_sentence(self, problem_hint: str, audience: str, rules: Dict[str, Any]) -> str:
+        clause = self._format_problem_clause(problem_hint)
+        prefix_template = rules.get("problem_prefix") or "{audience} are tired of"
+        prefix = prefix_template.replace("{audience}", audience)
+        sentence = f"{prefix} {clause}."
+        suffix = (rules.get("problem_suffix") or "").strip()
+        if suffix:
+            if suffix[-1] not in ".!?":
+                suffix += "."
+            sentence = f"{sentence} {suffix}"
+        return sentence.strip()
+
+    def _format_problem_clause(self, clause: str) -> str:
+        value = (clause or "doing everything manually").strip().rstrip('.!?')
+        if not value:
+            value = "doing everything manually"
+        return value
+
+    def _compose_solution_sentence(
+        self,
+        rules: Dict[str, Any],
+        product_name: Optional[str],
+        benefit_clause: str,
+        variant: Dict[str, Any],
+    ) -> str:
+        template = rules.get("solution_template") or DEFAULT_HOOK_RULE["solution_template"]
+        product_label = product_name or "This product"
+        sentence = template.format(product=product_label, benefit=benefit_clause)
+        visual = (variant.get("visual") or "").strip()
+        if visual:
+            visual_body = visual.rstrip('.!?') or visual
+            visual_sentence = f"Picture {visual_body}."
+            sentence = f"{sentence} {visual_sentence}"
+        credibility = (variant.get("credibility") or "").strip()
+        if credibility:
+            if credibility[-1] not in ".!?":
+                credibility += "."
+            sentence = f"{sentence} {credibility}"
+        return sentence.strip()
+
+    def _format_cta_text(self, goal: str, prefix: Optional[str]) -> str:
+        goal_clean = (goal or "Tap to learn more").strip().rstrip('.')
+        if not goal_clean:
+            goal_clean = "Tap to learn more"
+        prefix_clean = (prefix or "").strip()
+        phrase = f"{prefix_clean} {goal_clean}".strip() if prefix_clean else goal_clean
+        if phrase and phrase[-1] not in ".!?":
+            phrase = f"{phrase}."
+        return phrase
+
+    def _ensure_sentence(self, value: Optional[str]) -> str:
+        text = self._clean_script(value or "")
+        if not text:
+            return ""
+        if text[-1] not in ".!?":
+            return f"{text}."
+        return text
+
+    def _normalize_issue_phrase(self, hook_line: Optional[str]) -> str:
+        if not hook_line:
+            return "doing everything manually"
+        first_segment = re.split(r"[.?!]", hook_line)[0].strip()
+        if not first_segment:
+            return "doing everything manually"
+        lowered = first_segment.lower()
+        prefixes = ["still ", "stop ", "start ", "are you ", "is your ", "this ", "ever "]
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                first_segment = first_segment[len(prefix):].lstrip()
+                break
+        return first_segment or "doing everything manually"
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+    def _enforce_hook_line(self, script_content: str, hook_outline: Optional[Dict[str, Any]]) -> str:
+        if not hook_outline:
+            return script_content
+        hook_line = (hook_outline.get("sections") or {}).get("hook")
+        if not hook_line:
+            return script_content
+        normalized_hook = self._normalize_text(hook_line)
+        comparison_window = script_content[: max(len(hook_line) * 2, 40)]
+        if normalized_hook and normalized_hook not in self._normalize_text(comparison_window):
+            return f"{hook_line} {script_content}".strip()
+        return script_content
+
     # ------------------------------------------------------------------
-    def _build_system_prompt(self, use_case_config: Dict[str, Any]) -> str:
+    def _build_system_prompt(self, use_case_config: Dict[str, Any], hook_hint: Optional[Dict[str, Any]] = None) -> str:
         style = use_case_config.get("style", "realistic")
         duration = use_case_config.get("duration_target", 15)
         # Word count target: ~2.5 words per second for natural speech
@@ -243,6 +543,15 @@ OUTPUT: Only the refined script text."""
             },
         }
         style_info = style_guidance.get(style, style_guidance["realistic"])
+
+        hook_line = (hook_hint or {}).get("sections", {}).get("hook")
+        hook_instruction = ""
+        if hook_line:
+            tone_hint = (hook_hint or {}).get("tone") or style_info["tone"]
+            hook_instruction = (
+                f"\nHOOK REQUIREMENT: Use this exact sentence as line 1 without changing punctuation: \"{hook_line}\". "
+                f"Maintain the {tone_hint} delivery while keeping Hook → Problem → Solution → CTA order."
+            )
         
         return f"""You are an expert copywriter for viral short-form video ads (TikTok, Reels, Shorts).
 
@@ -255,7 +564,7 @@ STRUCTURE (follow this exactly):
 4. CTA (last 3 seconds): Clear, urgent call-to-action.
 
 STYLE: {style_info['tone']}
-APPROACH: {style_info['approach']}
+APPROACH: {style_info['approach']}{hook_instruction}
 
 RULES:
 - EXACTLY {word_target} words (not more, not less)
@@ -280,6 +589,9 @@ Comic: "Me before coffee: [insert zombie sounds]. Me after this mug: actually fu
         product_data: Dict[str, Any],
         use_case_config: Dict[str, Any],
         existing_script: Optional[str] = None,
+        *,
+        hook: Optional[Dict[str, Any]] = None,
+        hook_hint: Optional[Dict[str, Any]] = None,
     ) -> str:
         product_name = product_data.get("name", "Product")
         description = product_data.get("description", "")
@@ -329,6 +641,28 @@ Comic: "Me before coffee: [insert zombie sounds]. Me after this mug: actually fu
         parts.append(f"The ONE Thing They Care About: {key_benefit}")
         if social_proof:
             parts.append(f"Social Proof: A customer said '{social_proof}'")
+
+        if hook_hint and hook:
+            sections = hook_hint.get("sections") or {}
+            variant = hook.get("variant") or {}
+            parts.extend([
+                "",
+                "=== APPROVED HOOK (USE VERBATIM) ===",
+                f"Hook Type: {hook.get('hook_type', 'n/a')}",
+                f"Hook Tone Target: {hook_hint.get('tone', use_case_config.get('style', 'realistic'))}",
+                f"Hook Line (must be sentence 1): {sections.get('hook')}",
+            ])
+            on_screen = variant.get("on_screen")
+            visual = variant.get("visual")
+            credibility = variant.get("credibility")
+            if on_screen:
+                parts.append(f"On-Screen Text: {on_screen}")
+            if visual:
+                parts.append(f"Visual Reference: {visual}")
+            if credibility:
+                parts.append(f"Credibility Cue: {credibility}")
+            parts.append("Instruction: Use the hook line exactly as written, then continue with Problem → Solution → CTA.")
+
         parts.extend([
             "",
             "=== YOUR MISSION ===",
@@ -372,5 +706,12 @@ def generate_script(
     product_data: Dict[str, Any],
     use_case_config: Dict[str, Any],
     api_key: Optional[str] = None,
+    existing_script: Optional[str] = None,
+    hook: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    return ScriptGenerator(api_key=api_key).generate_script(product_data, use_case_config)
+    return ScriptGenerator(api_key=api_key).generate_script(
+        product_data,
+        use_case_config,
+        existing_script=existing_script,
+        hook=hook,
+    )

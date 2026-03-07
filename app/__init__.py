@@ -116,13 +116,17 @@ def create_app(config_name='default'):
         if not os.getenv('RENDER') or os.getenv('DATABASE_URL'):
             create_default_admin()
         
+        skip_create_all = os.getenv('SKIP_DB_CREATE_ALL', 'false').lower() == 'true'
         # Create all database tables (for new models like ClipLibrary)
         # This ensures new tables are created without needing manual migrations
-        try:
-            db.create_all()
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Could not create tables: {e}")
+        if not skip_create_all:
+            try:
+                db.create_all()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Could not create tables: {e}")
+        else:
+            app.logger.info("Skipping db.create_all() because SKIP_DB_CREATE_ALL is set")
     
     # Register blueprints
     from app.routes import main_bp

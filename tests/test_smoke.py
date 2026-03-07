@@ -25,7 +25,8 @@ def app():
         'TESTING': True,
         'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:',
         'UPLOAD_FOLDER': '/tmp/test_uploads',
-        'WTF_CSRF_ENABLED': False
+        'WTF_CSRF_ENABLED': False,
+        'LOGIN_DISABLED': True
     })
     
     with app.app_context():
@@ -67,6 +68,26 @@ class TestBasicRoutes:
         data = json.loads(response.data)
         assert data.get('status') == 'ok'
 
+
+
+
+class TestDashboardRoutes:
+    """Test dashboard-specific endpoints."""
+
+    def test_dashboard_status_endpoint(self, client, sample_product):
+        response = client.get('/api/dashboard/status')
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data.get('success') is True
+        assert 'pipeline' in data
+        assert 'active_projects' in data
+
+    def test_dashboard_pipeline_endpoint(self, client, sample_product):
+        response = client.get('/api/dashboard/pipeline')
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data.get('success') is True
+        assert 'pipeline' in data
 
 class TestProductRoutes:
     """Test product CRUD routes."""

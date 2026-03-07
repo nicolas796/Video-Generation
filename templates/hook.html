@@ -1,0 +1,1166 @@
+{% extends "base.html" %}
+
+{% block title %}Hook Builder - {{ product.name }}{% endblock %}
+
+{% block extra_css %}
+<style>
+    .hook-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+    .hook-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 1.5rem;
+        background: #fff;
+        height: 100%;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+    }
+    .hook-option {
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 1rem;
+        cursor: pointer;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        height: 100%;
+        background: #fff;
+    }
+    .hook-option:hover {
+        border-color: #93c5fd;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+    }
+    .hook-option.selected {
+        border-color: #2563eb;
+        box-shadow: 0 8px 20px rgba(37, 99, 235, 0.15);
+    }
+    .formula-chip {
+        background: #f1f5f9;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+        font-size: 0.8rem;
+        padding: 0.35rem 0.5rem;
+        border-radius: 8px;
+        display: inline-block;
+    }
+    .variant-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        overflow: hidden;
+        background: #fff;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+    }
+    .variant-card.selected {
+        border-color: #22c55e;
+        box-shadow: 0 10px 24px rgba(34, 197, 94, 0.2);
+    }
+    .variant-media {
+        width: 100%;
+        height: 240px;
+        object-fit: cover;
+        background: #f8fafc;
+    }
+    .variant-body {
+        padding: 1.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        flex: 1;
+    }
+    .variant-title {
+        font-weight: 600;
+        margin-bottom: 0.25rem;
+    }
+    .status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+    .status-ready { background: #dcfce7; color: #15803d; }
+    .status-running { background: #fef9c3; color: #ca8a04; }
+    .status-error { background: #fee2e2; color: #b91c1c; }
+    .status-pending { background: #e2e8f0; color: #475569; }
+    .audio-player { width: 100%; }
+    .hidden { display: none !important; }
+    .template-badge {
+        display: inline-flex;
+        align-items: center;
+        font-size: 0.75rem;
+        font-weight: 600;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        background: #f1f5f9;
+        margin-right: 0.25rem;
+        margin-bottom: 0.25rem;
+    }
+    .step-title {
+        font-size: 1rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        color: #64748b;
+        text-transform: uppercase;
+    }
+    .progress-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.25rem 0.65rem;
+        border-radius: 999px;
+        background: #eef2ff;
+        color: #4338ca;
+        font-size: 0.85rem;
+        font-weight: 500;
+    }
+    .variant-meta {
+        font-size: 0.9rem;
+        color: #475569;
+        background: #f8fafc;
+        border-radius: 10px;
+        padding: 0.75rem 1rem;
+    }
+    .variant-meta strong { display: block; font-size: 0.8rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.04em; }
+    .animate-panel {
+        border: 1px dashed #cbd5f5;
+        border-radius: 14px;
+        padding: 1.5rem;
+        background: #f8fafc;
+    }
+    .video-preview {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        background: #0f172a;
+    }
+
+    .hook-progress {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 0.75rem;
+        margin-bottom: 1.5rem;
+    }
+    .progress-step {
+        border: 1px solid #e2e8f0;
+        border-radius: 999px;
+        padding: 0.35rem 0.75rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.85rem;
+        color: #475569;
+        background: #f8fafc;
+        transition: all 0.2s ease;
+    }
+    .progress-step .step-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #cbd5f5;
+        flex-shrink: 0;
+    }
+    .progress-step[data-active="true"],
+    .progress-step[data-complete="true"] {
+        border-color: #c7d2fe;
+        background: #eef2ff;
+        color: #3730a3;
+    }
+    .progress-step[data-complete="true"] .step-dot {
+        background: #22c55e;
+    }
+    .progress-step[data-active="true"] .step-dot {
+        background: #2563eb;
+        box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15);
+    }
+    .hook-alerts .alert {
+        border-radius: 12px;
+        padding: 0.85rem 1.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .variants-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 1rem;
+    }
+    .animate-progress-track {
+        margin-top: 1rem;
+        height: 6px;
+        width: 100%;
+        background: #e2e8f0;
+        border-radius: 999px;
+        overflow: hidden;
+        display: none;
+    }
+    .animate-progress-bar {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #2563eb, #7c3aed);
+        transition: width 0.25s ease;
+    }
+    .hook-loading-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(248, 250, 252, 0.75);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 0.75rem;
+        z-index: 1050;
+    }
+    .hook-loading-overlay.hidden {
+        display: none;
+    }
+    .variant-skeleton {
+        border-radius: 14px;
+        background: linear-gradient(110deg, #f1f5f9 8%, #e2e8f0 18%, #f1f5f9 33%);
+        background-size: 200% 100%;
+        animation: shimmer 1.5s linear infinite;
+        height: 360px;
+    }
+    @keyframes shimmer {
+        to { background-position-x: -200%; }
+    }
+    .hook-timeline {
+        margin-top: 1rem;
+        border-top: 1px solid #e2e8f0;
+        padding-top: 1rem;
+        max-height: 220px;
+        overflow-y: auto;
+    }
+    .hook-timeline-entry {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        font-size: 0.85rem;
+        padding: 0.35rem 0;
+        border-bottom: 1px dashed #f1f5f9;
+    }
+    .hook-timeline-entry:last-child {
+        border-bottom: none;
+    }
+    .hook-timeline-entry .timestamp {
+        color: #94a3b8;
+        font-size: 0.75rem;
+    }
+    .auto-redirect-alert button {
+        font-size: 0.75rem;
+    }
+    @media (max-width: 576px) {
+        .hook-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        .progress-step {
+            font-size: 0.78rem;
+        }
+    }
+
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="hook-header mb-4">
+    <div>
+        <nav aria-label="breadcrumb">
+            <ol class="breadcrumb mb-2">
+                <li class="breadcrumb-item"><a href="{{ url_for('main.index') }}">Dashboard</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('main.spec_sheet_page', product_id=product.id) }}">Spec Sheet</a></li>
+                <li class="breadcrumb-item"><a href="{{ url_for('main.use_case_page', product_id=product.id) }}">Use Cases</a></li>
+                <li class="breadcrumb-item active">Hook</li>
+            </ol>
+        </nav>
+        <h1 class="h3 mb-1">Design the Winning Hook</h1>
+        <p class="text-muted mb-0">Lock in a scroll-stopping opener before you expand into a full script.</p>
+    </div>
+    <div class="d-flex flex-column align-items-end">
+        <span class="text-muted small">Product</span>
+        <strong>{{ product.name }}</strong>
+        <span class="text-muted small">Use Case: {{ use_case.name }}</span>
+    </div>
+
+</div>
+
+<div class="hook-progress" id="hookProgress" aria-label="Hook progress">
+    <div class="progress-step" data-step="choose" data-active="true">
+        <span class="step-dot"></span>
+        <div>
+            <strong>Choose</strong>
+            <small class="d-block text-muted">Pick formula</small>
+        </div>
+    </div>
+    <div class="progress-step" data-step="preview">
+        <span class="step-dot"></span>
+        <div>
+            <strong>Preview</strong>
+            <small class="d-block text-muted">Generate variants</small>
+        </div>
+    </div>
+    <div class="progress-step" data-step="animate">
+        <span class="step-dot"></span>
+        <div>
+            <strong>Animate</strong>
+            <small class="d-block text-muted">Motion check</small>
+        </div>
+    </div>
+    <div class="progress-step" data-step="script">
+        <span class="step-dot"></span>
+        <div>
+            <strong>Script</strong>
+            <small class="d-block text-muted">Send to writing</small>
+        </div>
+    </div>
+</div>
+<div class="hook-alerts mb-3">
+    <div id="hookAlerts" class="alert d-none" role="alert"></div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-8">
+        <div class="hook-card mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <div class="step-title">Step 1</div>
+                    <h2 class="h5 mb-1">Choose a Hook Formula</h2>
+                    <p class="text-muted mb-0">Pick one of the proven templates from our hook library.</p>
+                </div>
+                <span class="progress-badge"><i class="bi bi-lightning-charge-fill"></i> Template Library</span>
+            </div>
+            <div class="row g-3" id="hookTemplateGrid">
+                {% for key, template in hook_templates.items() %}
+                <div class="col-md-6">
+                    <div class="hook-option" data-hook-type="{{ key }}">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <h6 class="mb-0">{{ template.name }}</h6>
+                            <span class="badge bg-light text-dark">{{ template.best_for|first }}</span>
+                        </div>
+                        <p class="text-muted small mb-2">{{ template.description }}</p>
+                        <div class="formula-chip mb-2">{{ template.formula }}</div>
+                        <div class="small text-muted">
+                            {% for tag in template.best_for %}
+                            <span class="template-badge">{{ tag }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="d-flex gap-2 mt-3">
+                <button class="btn btn-primary" id="generateHooksBtn">
+                    <i class="bi bi-stars me-1"></i>Generate Hook Concepts
+                </button>
+                <button class="btn btn-outline-secondary" id="regeneratePreviewsBtn" disabled>
+                    <i class="bi bi-arrow-repeat me-1"></i>Regenerate Previews
+                </button>
+            </div>
+        </div>
+
+        <div class="hook-card mb-4" id="previewSection" style="display:none;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <div class="step-title">Step 2</div>
+                    <h2 class="h5 mb-1">Review Variants</h2>
+                    <p class="text-muted mb-0">Listen, view, and choose the hook that feels strongest.</p>
+                </div>
+                <div class="status-chip status-pending" id="previewStatus">Waiting for previews...</div>
+            </div>
+            <div id="variantsEmptyState" class="text-center text-muted py-4 d-none">
+                <div class="mb-2"><i class="bi bi-images" style="font-size:2rem;"></i></div>
+                <p class="mb-0">Tap Generate to preview hook variants.</p>
+            </div>
+            <div class="variants-grid" id="variantsGrid"></div>
+        </div>
+
+        <div class="animate-panel" id="animateSection">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <div class="step-title">Step 3</div>
+                    <h3 class="h5 mb-1">Animate the Winner</h3>
+                    <p class="text-muted mb-0">Generate a 5-second motion preview to sanity-check the vibe.</p>
+                </div>
+                <span class="status-chip status-pending" id="animateStatus">Hook not selected</span>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+                <button class="btn btn-success" id="animateBtn" disabled>
+                    <i class="bi bi-play-circle me-1"></i>Animate Hook
+                </button>
+                <button class="btn btn-outline-secondary" id="refreshStatusBtn" disabled>
+                    <i class="bi bi-arrow-clockwise me-1"></i>Refresh Status
+                </button>
+            </div>
+            <div class="animate-progress-track" id="animateProgressTrack">
+                <div class="animate-progress-bar" id="animateProgressBar"></div>
+            </div>
+            <div class="mt-3" id="videoPreviewWrapper" style="display:none;">
+                <video class="video-preview" id="hookVideo" controls muted playsinline></video>
+                <div class="mt-2 d-flex justify-content-between align-items-center">
+                    <span class="text-muted small">Animated preview ready.</span>
+                    <a id="hookVideoLink" class="btn btn-sm btn-outline-primary" target="_blank">
+                        <i class="bi bi-box-arrow-up-right me-1"></i>Open Video
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="hook-card mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0">Hook Status</h6>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-light text-dark" id="liveStatusLabel">Idle</span>
+                    <i class="bi bi-activity text-primary"></i>
+                </div>
+            </div>
+            <div id="statusSummary" class="text-muted small">No hook yet.</div>
+            <div class="hook-timeline" id="hookTimeline">
+                <div class="text-muted small" id="hookTimelineEmpty">No activity yet.</div>
+            </div>
+        </div>
+        <div class="hook-card">
+            <h6 class="mb-2">Next Steps</h6>
+            <p class="small text-muted">Once you've locked in a hook you'll expand it into a full script.</p>
+            <div class="d-grid gap-2">
+                <a href="{{ url_for('main.use_case_page', product_id=product.id) }}" class="btn btn-outline-secondary">
+                    <i class="bi bi-arrow-left me-1"></i>Back to Use Case
+                </a>
+                <a href="{{ url_for('main.script_page', use_case_id=use_case.id) }}" class="btn btn-primary" id="nextToScript" disabled>
+                    Continue to Script<i class="bi bi-arrow-right ms-1"></i>
+                </a>
+            </div>
+            <div class="alert alert-info d-none auto-redirect-alert mt-3" id="autoRedirectNotice">
+                <div class="d-flex flex-column">
+                    <strong class="mb-1"><i class="bi bi-arrow-repeat me-1"></i>Hook locked! Redirecting to script...</strong>
+                    <span class="small">Hang tight or stay here to experiment more.</span>
+                </div>
+                <button class="btn btn-sm btn-outline-primary mt-2" id="stayOnHookBtn">Stay on Hook Page</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="hookLoadingOverlay" class="hook-loading-overlay hidden" aria-live="polite" aria-busy="true">
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Working...</span>
+    </div>
+    <p class="text-muted mb-0" id="hookLoadingText">Working...</p>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+
+<script>
+const useCaseId = {{ use_case.id }};
+const csrfToken = '{{ csrf_token() }}';
+const hookTemplates = {{ hook_templates | tojson }};
+const existingHook = {{ hook.to_dict() | tojson if hook else 'null' }};
+const scriptUrl = '{{ url_for('main.script_page', use_case_id=use_case.id) }}';
+
+let selectedHookType = existingHook ? existingHook.hook_type : null;
+let currentHookId = existingHook ? existingHook.id : null;
+let variants = existingHook && existingHook.variants ? existingHook.variants : [];
+let imageUrls = [];
+let audioManifest = {};
+let selectedVariantIndex = existingHook && Number.isInteger(existingHook.winning_variant_index)
+    ? existingHook.winning_variant_index
+    : null;
+let hookReadyForScript = Number.isInteger(selectedVariantIndex);
+let isGenerating = false;
+let activeAnimationTaskId = null;
+let statusPollInterval = null;
+let latestHookState = existingHook || null;
+let lastStatusValue = existingHook ? (existingHook.status || null) : null;
+let timelineEvents = [];
+let autoRedirectTimer = null;
+const STATUS_POLL_INTERVAL = 4500;
+const AUTO_REDIRECT_DELAY = 4000;
+const placeholderImage = 'https://via.placeholder.com/600x800?text=Hook+Preview';
+
+const hookCards = document.querySelectorAll('.hook-option');
+const generateBtn = document.getElementById('generateHooksBtn');
+const regenBtn = document.getElementById('regeneratePreviewsBtn');
+const previewSection = document.getElementById('previewSection');
+const variantsGrid = document.getElementById('variantsGrid');
+const variantsEmptyState = document.getElementById('variantsEmptyState');
+const previewStatus = document.getElementById('previewStatus');
+const animateBtn = document.getElementById('animateBtn');
+const animateStatus = document.getElementById('animateStatus');
+const refreshBtn = document.getElementById('refreshStatusBtn');
+const videoWrapper = document.getElementById('videoPreviewWrapper');
+const videoElement = document.getElementById('hookVideo');
+const videoLink = document.getElementById('hookVideoLink');
+const statusSummary = document.getElementById('statusSummary');
+const nextButton = document.getElementById('nextToScript');
+const hookAlerts = document.getElementById('hookAlerts');
+const hookLoadingOverlay = document.getElementById('hookLoadingOverlay');
+const hookLoadingText = document.getElementById('hookLoadingText');
+const hookProgressSteps = document.querySelectorAll('.progress-step');
+const liveStatusLabel = document.getElementById('liveStatusLabel');
+const hookTimeline = document.getElementById('hookTimeline');
+const hookTimelineEmpty = document.getElementById('hookTimelineEmpty');
+const autoRedirectNotice = document.getElementById('autoRedirectNotice');
+const stayOnHookBtn = document.getElementById('stayOnHookBtn');
+const animateProgressTrack = document.getElementById('animateProgressTrack');
+const animateProgressBar = document.getElementById('animateProgressBar');
+
+const statusMeta = {
+    draft: { label: 'Draft', message: 'Concept ready – generate previews', chip: 'status-pending', badge: 'badge bg-secondary text-white', step: 'choose' },
+    preview_ready: { label: 'Previews Ready', message: 'Variants are ready to review', chip: 'status-ready', badge: 'badge bg-success text-white', step: 'preview' },
+    ready_for_animation: { label: 'Variant Locked', message: 'Animate the winning hook when ready', chip: 'status-ready', badge: 'badge bg-primary text-white', step: 'animate' },
+    animating: { label: 'Animating', message: 'Motion preview rendering in the background', chip: 'status-running', badge: 'badge bg-warning text-dark', step: 'animate' },
+    complete: { label: 'Hook Complete', message: 'Animated hook ready. Continue to Script.', chip: 'status-ready', badge: 'badge bg-success text-white', step: 'script' },
+    failed: { label: 'Failed', message: 'Something misfired. Try regenerating.', chip: 'status-error', badge: 'badge bg-danger text-white', step: 'preview' },
+    default: { label: 'Idle', message: 'No hook yet.', chip: 'status-pending', badge: 'badge bg-light text-dark', step: 'choose' }
+};
+
+hookCards.forEach(card => {
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.addEventListener('click', () => {
+        hookCards.forEach(c => {
+            c.classList.remove('selected');
+            c.setAttribute('aria-pressed', 'false');
+        });
+        card.classList.add('selected');
+        card.setAttribute('aria-pressed', 'true');
+        selectedHookType = card.dataset.hookType;
+        cancelAutoRedirect(false);
+    });
+    card.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            card.click();
+        }
+    });
+});
+
+if (generateBtn) {
+    generateBtn.addEventListener('click', async () => {
+        if (!selectedHookType) {
+            showAlert('warning', 'Select a hook template first.');
+            return;
+        }
+        await createHook();
+    });
+}
+
+if (regenBtn) {
+    regenBtn.addEventListener('click', async () => {
+        if (!currentHookId) return;
+        cancelAutoRedirect(false);
+        await generatePreviews();
+    });
+}
+
+if (animateBtn) {
+    animateBtn.addEventListener('click', async () => {
+        if (selectedVariantIndex === null || !currentHookId) {
+            showAlert('warning', 'Select a hook variant before animating.');
+            return;
+        }
+        await selectVariant(selectedVariantIndex, { silent: true });
+        await animateHook();
+    });
+}
+
+if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+        cancelAutoRedirect(false);
+        refreshStatus();
+    });
+}
+
+if (stayOnHookBtn) {
+    stayOnHookBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        cancelAutoRedirect();
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    if (existingHook) {
+        applyHookState(existingHook, { seedTimeline: true });
+        startStatusPolling();
+        refreshStatus(true);
+    } else {
+        updateHookSelectionUI();
+        updateVariantsVisibility(false);
+    }
+});
+
+window.addEventListener('beforeunload', stopStatusPolling);
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        stopStatusPolling();
+    } else if (currentHookId) {
+        refreshStatus(true);
+        startStatusPolling();
+    }
+});
+
+async function createHook() {
+    if (isGenerating) return;
+    setLoading(true, 'Generating hook concepts...', { overlay: true });
+    showAlert('info', 'Creating fresh hook concepts...');
+    try {
+        const response = await fetch(`/api/use-cases/${useCaseId}/hook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+            body: JSON.stringify({ hook_type: selectedHookType })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to generate hooks');
+        }
+        if (data.hook && data.hook.id) {
+            currentHookId = data.hook.id;
+        }
+        latestHookState = data.hook;
+        variants = data.hook && data.hook.variants ? data.hook.variants : [];
+        selectedVariantIndex = null;
+        hookReadyForScript = false;
+        regenBtn.disabled = false;
+        refreshBtn.disabled = false;
+        applyHookState(data.hook || {}, { seedTimeline: true });
+        showAlert('success', 'Hook concepts created. Generating previews next...');
+        await generatePreviews();
+        startStatusPolling();
+    } catch (error) {
+        showAlert('danger', error.message || 'Failed to generate hook concepts');
+    } finally {
+        setLoading(false, null, { overlay: true });
+    }
+}
+
+async function generatePreviews() {
+    if (!currentHookId) return;
+    setPreviewStatus('running', 'Generating previews...');
+    setLoading(true, 'Generating previews...', { overlay: true });
+    showVariantSkeletons();
+    try {
+        const response = await fetch(`/api/hooks/${currentHookId}/generate-previews`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to generate previews');
+        }
+        const hookPayload = {
+            id: currentHookId,
+            hook_type: selectedHookType,
+            variants: data.variants,
+            image_urls: data.image_urls,
+            audio_manifest: data.audio_manifest,
+            status: data.status || 'preview_ready',
+            winning_variant_index: null
+        };
+        selectedVariantIndex = null;
+        hookReadyForScript = false;
+        applyHookState(hookPayload);
+        showAlert('success', 'Previews ready. Review your variants.');
+    } catch (error) {
+        setPreviewStatus('error', error.message || 'Preview generation failed');
+        showAlert('danger', error.message || 'Preview generation failed');
+    } finally {
+        hideVariantSkeletons();
+        setLoading(false, null, { overlay: true });
+    }
+}
+
+async function selectVariant(index, options = {}) {
+    if (currentHookId === null) return;
+    if (selectedVariantIndex === index && hookReadyForScript) {
+        setPreviewStatus('ready', `Variant ${index + 1} already selected`);
+        renderVariants();
+        return;
+    }
+    setLoading(true, 'Saving selection...', { overlay: false });
+    try {
+        const response = await fetch(`/api/hooks/${currentHookId}/select`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+            body: JSON.stringify({ variant_index: index })
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to select variant');
+        }
+        selectedVariantIndex = index;
+        hookReadyForScript = true;
+        nextButton.disabled = false;
+        setPreviewStatus('ready', `Variant ${index + 1} selected`);
+        showAlert('success', 'Hook variant locked in.');
+        if (!options.silent) {
+            refreshStatus(true);
+        } else {
+            renderVariants();
+            updateActionButtons();
+        }
+    } catch (error) {
+        showAlert('danger', error.message || 'Failed to select variant');
+    } finally {
+        setLoading(false, null, { overlay: false });
+    }
+}
+
+async function animateHook() {
+    if (!currentHookId) return;
+    cancelAutoRedirect(false);
+    setButtonLoading(animateBtn, true, 'Animating...');
+    setAnimateStatus('running', 'Animation queued...');
+    updateAnimateProgress(35, true);
+    try {
+        const response = await fetch(`/api/hooks/${currentHookId}/animate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Animation failed');
+        }
+        activeAnimationTaskId = data.task_id || null;
+        if (data.video_url) {
+            updateVideoPreview(data.video_url);
+            updateAnimateProgress(100, true);
+            setAnimateStatus('ready', 'Animation complete');
+            showAlert('success', 'Hook animation ready!');
+            refreshStatus(true);
+        } else {
+            updateAnimateProgress(55, true);
+            setAnimateStatus('running', 'Animation in progress...');
+            showAlert('info', 'Animation queued. We will refresh status automatically.');
+            setTimeout(() => refreshStatus(true), 2000);
+        }
+    } catch (error) {
+        setAnimateStatus('error', 'Animation failed');
+        updateAnimateProgress(0, false);
+        showAlert('danger', error.message || 'Animation failed');
+    } finally {
+        setButtonLoading(animateBtn, false);
+        updateActionButtons();
+    }
+}
+
+async function refreshStatus(silent = false) {
+    if (!currentHookId) return;
+    try {
+        const response = await fetch(`/api/hooks/${currentHookId}/status`);
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || 'Failed to fetch status');
+        }
+        applyHookState(data.hook);
+    } catch (error) {
+        if (!silent) {
+            showAlert('danger', error.message || 'Failed to refresh status');
+        }
+    }
+}
+
+function applyHookState(hook, options = {}) {
+    if (!hook) return;
+    latestHookState = { ...latestHookState, ...hook };
+    currentHookId = hook.id || currentHookId;
+    if (hook.hook_type) {
+        selectedHookType = hook.hook_type;
+    }
+    normalizeImageData(hook);
+    variants = hook.variants || variants;
+    if (Number.isInteger(hook.winning_variant_index)) {
+        selectedVariantIndex = hook.winning_variant_index;
+        hookReadyForScript = true;
+    }
+    updateHookSelectionUI();
+    updateVariantsVisibility(Boolean(variants.length));
+    if (variants.length) {
+        renderVariants();
+    }
+    const status = (hook.status || '').toLowerCase();
+    updateStatusSummary(status, hook.error_message);
+    updateProgressByStatus(status);
+    updateAnimateUI(hook);
+    updateNextStepUI();
+    updateActionButtons();
+    if (options.seedTimeline && status && !timelineEvents.length) {
+        appendTimelineEntry(status, hook.error_message || (statusMeta[status] ? statusMeta[status].message : statusMeta.default.message));
+        lastStatusValue = status;
+    } else if (status && status !== lastStatusValue) {
+        appendTimelineEntry(status, hook.error_message || (statusMeta[status] ? statusMeta[status].message : statusMeta.default.message));
+        lastStatusValue = status;
+    }
+    if (hookReadyForScript && status === 'complete') {
+        scheduleAutoRedirect();
+    } else if (status !== 'complete') {
+        cancelAutoRedirect(false);
+    }
+}
+
+function normalizeImageData(hook) {
+    if (hook.image_urls && Array.isArray(hook.image_urls)) {
+        imageUrls = hook.image_urls;
+    } else if (hook.image_paths && Array.isArray(hook.image_paths)) {
+        imageUrls = hook.image_paths.map(path => toUploadUrl(path));
+    }
+    if (hook.audio_manifest) {
+        audioManifest = {};
+        Object.entries(hook.audio_manifest).forEach(([key, value]) => {
+            audioManifest[key] = toUploadUrl(value);
+        });
+    }
+}
+
+function updateHookSelectionUI() {
+    hookCards.forEach(card => {
+        const isSelected = card.dataset.hookType === selectedHookType;
+        card.classList.toggle('selected', isSelected);
+        card.setAttribute('aria-pressed', isSelected);
+    });
+}
+
+function updateVariantsVisibility(hasVariants) {
+    if (!previewSection) return;
+    previewSection.style.display = 'block';
+    if (hasVariants) {
+        variantsEmptyState.classList.add('d-none');
+    } else if (isGenerating) {
+        variantsEmptyState.classList.add('d-none');
+    } else {
+        variantsEmptyState.classList.remove('d-none');
+    }
+}
+
+function renderVariants() {
+    if (!variantsGrid) return;
+    variantsGrid.innerHTML = '';
+    if (!variants.length) {
+        variantsEmptyState.classList.remove('d-none');
+        return;
+    }
+    variantsEmptyState.classList.add('d-none');
+    variants.forEach((variant, idx) => {
+        const selected = idx === selectedVariantIndex;
+        const imageUrl = getImageUrlForIndex(idx);
+        const audioUrl = getAudioUrlForIndex(idx);
+        const card = document.createElement('div');
+        card.innerHTML = `
+            <div class="variant-card ${selected ? 'selected' : ''}" data-variant-index="${idx}">
+                <img src="${imageUrl}" class="variant-media" onerror="this.src='${placeholderImage}'" alt="Hook variant ${idx + 1}">
+                <div class="variant-body">
+                    <div>
+                        <div class="variant-title">Variant ${idx + 1}</div>
+                        <p class="mb-1"><strong>Verbal:</strong> ${escapeHtml(variant.verbal)}</p>
+                        <p class="text-muted small mb-1"><strong>On-Screen:</strong> ${escapeHtml(variant.on_screen || 'N/A')}</p>
+                    </div>
+                    <div class="variant-meta">
+                        <strong>Why it works</strong>
+                        <span>${escapeHtml(variant.why_it_works || 'Punchy opening that earns attention')}</span>
+                    </div>
+                    <div>
+                        <audio class="audio-player" controls ${audioUrl ? '' : 'disabled'}>
+                            ${audioUrl ? `<source src="${audioUrl}" type="audio/mpeg">` : ''}
+                        </audio>
+                    </div>
+                    <button class="btn ${selected ? 'btn-success' : 'btn-outline-primary'} select-variant" data-index="${idx}">
+                        ${selected ? '<i class="bi bi-check-circle me-1"></i>Selected' : 'Select this hook'}
+                    </button>
+                </div>
+            </div>`;
+        const variantCard = card.querySelector('.variant-card');
+        variantCard.addEventListener('click', (event) => {
+            if (event.target.closest('button') || event.target.closest('audio')) {
+                return;
+            }
+            selectVariant(idx);
+        });
+        card.querySelector('.select-variant').addEventListener('click', (event) => {
+            event.stopPropagation();
+            selectVariant(idx);
+        });
+        variantsGrid.appendChild(card.firstElementChild);
+    });
+}
+
+function showVariantSkeletons(count = 3) {
+    if (!variantsGrid) return;
+    previewSection.style.display = 'block';
+    variantsGrid.innerHTML = '';
+    for (let i = 0; i < count; i += 1) {
+        const skeleton = document.createElement('div');
+        skeleton.className = 'variant-skeleton';
+        variantsGrid.appendChild(skeleton);
+    }
+}
+
+function hideVariantSkeletons() {
+    if (!variantsGrid) return;
+    variantsGrid.innerHTML = '';
+}
+
+function setPreviewStatus(state, text) {
+    if (!previewStatus) return;
+    const classMap = {
+        pending: 'status-pending',
+        running: 'status-running',
+        ready: 'status-ready',
+        error: 'status-error'
+    };
+    previewStatus.className = `status-chip ${classMap[state] || 'status-pending'}`;
+    previewStatus.innerText = text;
+}
+
+function setAnimateStatus(state, text) {
+    if (!animateStatus) return;
+    const classMap = {
+        pending: 'status-pending',
+        running: 'status-running',
+        ready: 'status-ready',
+        error: 'status-error'
+    };
+    animateStatus.className = `status-chip ${classMap[state] || 'status-pending'}`;
+    animateStatus.innerText = text;
+}
+
+function updateStatusSummary(status, errorMessage) {
+    const meta = statusMeta[status] || statusMeta.default;
+    statusSummary.innerHTML = `
+        <div class="d-flex flex-column gap-2">
+            <span class="status-chip ${meta.chip}">${meta.label}</span>
+            <span>${escapeHtml(errorMessage || meta.message)}</span>
+        </div>`;
+    if (liveStatusLabel) {
+        liveStatusLabel.textContent = meta.label;
+        liveStatusLabel.className = meta.badge;
+    }
+    if (!variants.length && status === 'draft') {
+        setPreviewStatus('pending', 'Generate previews to continue');
+    } else if (variants.length) {
+        setPreviewStatus('ready', 'Previews ready');
+    }
+    if (status === 'animating') {
+        setAnimateStatus('running', 'Animation in progress...');
+    } else if (status === 'complete') {
+        setAnimateStatus('ready', 'Hook animated');
+    } else if (status === 'ready_for_animation') {
+        setAnimateStatus('ready', 'Variant locked. Animate when ready.');
+    }
+}
+
+function updateProgressByStatus(status) {
+    const meta = statusMeta[status] || statusMeta.default;
+    const step = meta.step;
+    markProgress(step);
+}
+
+function markProgress(activeStep) {
+    const order = ['choose', 'preview', 'animate', 'script'];
+    const activeIndex = order.indexOf(activeStep);
+    hookProgressSteps.forEach(stepEl => {
+        const step = stepEl.dataset.step;
+        const stepIndex = order.indexOf(step);
+        stepEl.dataset.active = stepIndex === activeIndex;
+        stepEl.dataset.complete = stepIndex < activeIndex;
+    });
+}
+
+function updateActionButtons() {
+    const status = ((latestHookState && latestHookState.status) || '').toLowerCase();
+    const isAnimating = status === 'animating';
+    animateBtn.disabled = selectedVariantIndex === null || isAnimating || !currentHookId;
+    regenBtn.disabled = !currentHookId || isAnimating;
+    refreshBtn.disabled = !currentHookId;
+    nextButton.disabled = !hookReadyForScript;
+}
+
+function updateNextStepUI() {
+    nextButton.disabled = !hookReadyForScript;
+}
+
+function updateAnimateUI(hook) {
+    const status = (hook.status || '').toLowerCase();
+    if (hook.video_url) {
+        updateVideoPreview(hook.video_url);
+        updateAnimateProgress(100, true);
+    } else if (status === 'animating') {
+        updateAnimateProgress(60, true);
+        videoWrapper.style.display = 'none';
+        if (videoElement) { videoElement.removeAttribute('src'); }
+    } else {
+        updateAnimateProgress(0, false);
+        if (!hook.video_url && videoWrapper) {
+            videoWrapper.style.display = 'none';
+            if (videoElement) { videoElement.removeAttribute('src'); }
+        }
+    }
+    if (status === 'ready_for_animation' && selectedVariantIndex !== null) {
+        setAnimateStatus('ready', 'Variant locked. Click animate when ready.');
+    } else if (status === 'complete') {
+        setAnimateStatus('ready', 'Hook animated');
+    }
+}
+
+function updateVideoPreview(url) {
+    if (!videoWrapper || !videoElement || !videoLink || !url) return;
+    videoWrapper.style.display = 'block';
+    videoElement.src = url;
+    videoLink.href = url;
+}
+
+function updateAnimateProgress(percent, visible) {
+    if (!animateProgressTrack || !animateProgressBar) return;
+    animateProgressTrack.style.display = visible ? 'block' : 'none';
+    animateProgressBar.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+}
+
+let alertTimeout = null;
+function showAlert(type, message, options = {}) {
+    if (!hookAlerts) return;
+    const { timeout = 4500, sticky = false } = options;
+    hookAlerts.className = `alert alert-${type}`;
+    hookAlerts.textContent = message;
+    hookAlerts.classList.remove('d-none');
+    if (alertTimeout) {
+        clearTimeout(alertTimeout);
+    }
+    if (!sticky) {
+        alertTimeout = setTimeout(() => {
+            hookAlerts.classList.add('d-none');
+        }, timeout);
+    }
+}
+
+function appendTimelineEntry(status, detail) {
+    if (!hookTimeline) return;
+    if (hookTimelineEmpty) {
+        hookTimelineEmpty.classList.add('d-none');
+    }
+    const meta = statusMeta[status] || statusMeta.default;
+    const entry = document.createElement('div');
+    entry.className = 'hook-timeline-entry';
+    entry.innerHTML = `
+        <div>
+            <strong>${meta.label}</strong>
+            <div class="small text-muted">${escapeHtml(detail || meta.message)}</div>
+        </div>
+        <div class="timestamp">${formatTimestamp()}</div>`;
+    hookTimeline.prepend(entry);
+    timelineEvents.unshift({ status, detail, ts: Date.now() });
+    while (hookTimeline.children.length > 8) {
+        hookTimeline.removeChild(hookTimeline.lastElementChild);
+    }
+}
+
+function scheduleAutoRedirect() {
+    if (!autoRedirectNotice || autoRedirectTimer) return;
+    autoRedirectNotice.classList.remove('d-none');
+    autoRedirectTimer = setTimeout(() => {
+        window.location.href = scriptUrl;
+    }, AUTO_REDIRECT_DELAY);
+}
+
+function cancelAutoRedirect(notify = true) {
+    if (autoRedirectTimer) {
+        clearTimeout(autoRedirectTimer);
+        autoRedirectTimer = null;
+    }
+    if (autoRedirectNotice) {
+        autoRedirectNotice.classList.add('d-none');
+    }
+    if (notify) {
+        showAlert('info', 'Auto-redirect canceled. Stay on the Hook page to tweak more.');
+    }
+}
+
+function startStatusPolling() {
+    if (statusPollInterval || !currentHookId) return;
+    statusPollInterval = setInterval(() => refreshStatus(true), STATUS_POLL_INTERVAL);
+}
+
+function stopStatusPolling() {
+    if (!statusPollInterval) return;
+    clearInterval(statusPollInterval);
+    statusPollInterval = null;
+}
+
+function setLoading(state, message = 'Working...', options = {}) {
+    const { overlay = false } = options;
+    isGenerating = state;
+    generateBtn.disabled = state;
+    regenBtn.disabled = state || !currentHookId;
+    refreshBtn.disabled = state || !currentHookId;
+    if (overlay) {
+        toggleOverlay(state, message);
+    }
+    if (!state) {
+        updateActionButtons();
+    }
+}
+
+function toggleOverlay(show, message) {
+    if (!hookLoadingOverlay || !hookLoadingText) return;
+    if (show) {
+        hookLoadingOverlay.classList.remove('hidden');
+        hookLoadingText.textContent = message || 'Working...';
+    } else {
+        hookLoadingOverlay.classList.add('hidden');
+        hookLoadingText.textContent = 'Working...';
+    }
+}
+
+function setButtonLoading(btn, state, loadingText) {
+    if (!btn) return;
+    if (state) {
+        if (!btn.dataset.originalLabel) {
+            btn.dataset.originalLabel = btn.innerHTML;
+        }
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-2" role="status"></span>${loadingText || 'Working...'}`;
+        btn.disabled = true;
+    } else {
+        if (btn.dataset.originalLabel) {
+            btn.innerHTML = btn.dataset.originalLabel;
+        }
+        btn.disabled = false;
+    }
+}
+
+function getImageUrlForIndex(idx) {
+    if (Array.isArray(imageUrls) && imageUrls[idx]) {
+        return imageUrls[idx];
+    }
+    if (imageUrls && typeof imageUrls === 'object') {
+        return imageUrls[idx] || imageUrls[String(idx)] || placeholderImage;
+    }
+    return placeholderImage;
+}
+
+function getAudioUrlForIndex(idx) {
+    if (!audioManifest) return null;
+    return audioManifest[idx] || audioManifest[String(idx)] || null;
+}
+
+function toUploadUrl(path) {
+    if (!path) return null;
+    if (path.startsWith('http')) return path;
+    return `/uploads/${path.replace(/^\/+/, '')}`;
+}
+
+function formatTimestamp(ts = Date.now()) {
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+
+{% endblock %}

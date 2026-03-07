@@ -50,6 +50,9 @@ services:
       - key: MOONSHOT_API_KEY
         sync: false
       
+      - key: FLUX_API_KEY
+        sync: false
+      
       - key: POLLO_WEBHOOK_SECRET
         sync: false
       
@@ -117,6 +120,9 @@ services:
         sync: false
       
       - key: MOONSHOT_API_KEY
+        sync: false
+      
+      - key: FLUX_API_KEY
         sync: false
       
       - key: POLLO_WEBHOOK_SECRET

@@ -74,134 +74,255 @@ class Product(db.Model):
         }
     
     def get_current_stage_info(self):
-        """Get the current pipeline stage information for this product.
-        
-        Returns a dict with:
-        - current_stage: the current stage name (scrape, usecase, script, video_gen, assembly, output)
-        - stage_label: human-readable label
-        - progress_pct: approximate completion percentage
-        - next_url: URL to continue work
-        - use_case_id: current use case ID (if any)
-        - use_case_name: current use case name (if any)
-        - is_complete: whether the project is fully complete
+        """Return an overview of the product's pipeline status.
+
+        The response powers the dashboard \"Continue\" card and pipeline UI.
+        It includes stage metadata, progress percentage, clip stats, and
+        navigation targets for each step.
         """
-        from app import db
-        
-        # Check for use cases
+
+        # Fetch latest use case + related artifacts (if any)
         use_cases = UseCase.query.filter_by(product_id=self.id).order_by(UseCase.created_at.desc()).all()
-        
-        if not use_cases:
-            return {
-                'current_stage': 'usecase',
-                'stage_label': 'Scraped - Needs Use Case',
-                'progress_pct': 14.3,
-                'next_url': f"/use-case/{self.id}",
-                'use_case_id': None,
-                'use_case_name': None,
-                'is_complete': False
+        use_case = use_cases[0] if use_cases else None
+        use_case_id = use_case.id if use_case else None
+        use_case_name = use_case.name if use_case else None
+
+        script = None
+        clips = []
+        complete_clips = []
+        error_clips = []
+        pending_clips = []
+        target_clips = 0
+        final_video = None
+        hook = Hook.query.filter_by(use_case_id=use_case_id).first() if use_case_id else None
+
+        if use_case_id:
+            script = Script.query.filter_by(use_case_id=use_case_id).order_by(Script.created_at.desc()).first()
+            clips = VideoClip.query.filter_by(use_case_id=use_case_id).all()
+            complete_clips = [c for c in clips if c.status == 'complete']
+            error_clips = [c for c in clips if c.status == 'error']
+            pending_clips = [c for c in clips if c.status in ('pending', 'generating')]
+            target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
+            final_video = FinalVideo.query.filter_by(use_case_id=use_case_id).order_by(FinalVideo.created_at.desc()).first()
+
+        clip_stats = {
+            'complete': len(complete_clips),
+            'errors': len(error_clips),
+            'pending': len(pending_clips),
+            'target': target_clips
+        }
+
+        stage_order = ['scrape', 'spec', 'hook', 'script', 'video', 'assembly', 'output']
+        use_case_url = f"/use-case/{self.id}"
+        hook_url = f"/hook/{use_case_id}" if use_case_id else use_case_url
+        script_url = f"/script/{use_case_id}" if use_case_id else use_case_url
+        video_url = f"/video-gen/{use_case_id}" if use_case_id else use_case_url
+        assembly_url = f"/assembly/{use_case_id}" if use_case_id else use_case_url
+        output_url = f"/output/{use_case_id}" if use_case_id else use_case_url
+
+        stage_templates = {
+            'scrape': {
+                'label': 'Scrape',
+                'description': 'Import product data',
+                'url': '/scrape'
+            },
+            'spec': {
+                'label': 'Spec',
+                'description': 'Configure use case & voice',
+                'url': use_case_url
+            },
+            'hook': {
+                'label': 'Hook',
+                'description': 'Choose and preview your hook',
+                'url': hook_url
+            },
+            'script': {
+                'label': 'Script',
+                'description': 'Generate and approve script',
+                'url': script_url
+            },
+            'video': {
+                'label': 'Video',
+                'description': 'Generate required clips',
+                'url': video_url
+            },
+            'assembly': {
+                'label': 'Assembly',
+                'description': 'Assemble clips with voiceover',
+                'url': assembly_url
+            },
+            'output': {
+                'label': 'Output',
+                'description': 'Download & share final video',
+                'url': output_url
             }
-        
-        # Get most recent use case
-        use_case = use_cases[0]
-        
-        # Check script status
-        script = Script.query.filter_by(use_case_id=use_case.id).first()
-        
-        if not script:
-            return {
-                'current_stage': 'script',
-                'stage_label': 'Needs Script',
-                'progress_pct': 28.6,
-                'next_url': f"/script/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
+        }
+
+        stage_progress = {
+            'scrape': 12.5,
+            'spec': 25.0,
+            'hook': 40.0,
+            'script': 55.0,
+            'video': 75.0,
+            'assembly': 90.0,
+            'output': 100.0
+        }
+
+        stage_status_map = {
+            key: {
+                'status': 'pending',
+                'summary': tmpl['description'],
+                'enabled': key == 'scrape'
             }
-        
-        if script.status != 'approved':
-            return {
-                'current_stage': 'script',
-                'stage_label': 'Script Pending Approval',
-                'progress_pct': 42.9,
-                'next_url': f"/script/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-        
-        # Check video clips
-        clips = VideoClip.query.filter_by(use_case_id=use_case.id).all()
-        complete_clips = [c for c in clips if c.status == 'complete']
-        error_clips = [c for c in clips if c.status == 'error']
-        pending_clips = [c for c in clips if c.status in ('pending', 'generating')]
-        
-        target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
-        
-        # If not all clips are complete, we're in video_gen stage
-        if len(complete_clips) < target_clips:
-            if error_clips:
-                label = f'Video Gen - {len(error_clips)} Error(s)'
-            elif pending_clips:
-                label = f'Video Gen - {len(complete_clips)}/{target_clips} Complete'
+            for key, tmpl in stage_templates.items()
+        }
+
+        def set_stage_state(key, status, summary, enabled=None):
+            entry = stage_status_map.get(key, {}).copy()
+            entry['status'] = status
+            entry['summary'] = summary
+            if enabled is None:
+                entry['enabled'] = status in ('current', 'complete')
             else:
-                label = 'Video Gen - Starting'
-            
-            clip_progress = (len(complete_clips) / max(target_clips, 1)) * 14.3
-            
+                entry['enabled'] = bool(enabled)
+            stage_status_map[key] = entry
+
+        def build_response(current_stage_key: str, stage_label: str, progress_value: float, is_complete: bool = False):
+            steps = []
+            for key in stage_order:
+                template = stage_templates[key]
+                status_meta = stage_status_map.get(key, {})
+                steps.append({
+                    'key': key,
+                    'label': template['label'],
+                    'description': template['description'],
+                    'summary': status_meta.get('summary', template['description']),
+                    'status': status_meta.get('status', 'pending'),
+                    'url': template['url'],
+                    'enabled': bool(status_meta.get('enabled', False) and template['url']),
+                    'progress_pct': stage_progress[key],
+                    'is_current': status_meta.get('status') == 'current',
+                    'is_complete': status_meta.get('status') == 'complete'
+                })
+            next_url = stage_templates.get(current_stage_key, {}).get('url') or '/scrape'
+            pending_step = next((step for step in steps if step['status'] == 'current'), None)
+            if pending_step and pending_step.get('url'):
+                next_url = pending_step['url']
             return {
-                'current_stage': 'video_gen',
-                'stage_label': label,
-                'progress_pct': 42.9 + clip_progress,
-                'next_url': f"/video-gen/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
+                'current_stage': current_stage_key,
+                'stage_label': stage_label,
+                'progress_pct': round(progress_value, 1),
+                'next_url': next_url,
+                'use_case_id': use_case_id,
+                'use_case_name': use_case_name,
+                'is_complete': is_complete,
+                'pipeline_steps': steps,
+                'clip_stats': clip_stats,
+                'final_video_status': final_video.status if final_video else None
             }
-        
-        # All clips complete - check assembly status
-        final_video = FinalVideo.query.filter_by(use_case_id=use_case.id).order_by(FinalVideo.created_at.desc()).first()
-        
-        if not final_video:
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Ready for Assembly',
-                'progress_pct': 71.4,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-        
-        if final_video.status == 'complete':
-            return {
-                'current_stage': 'output',
-                'stage_label': 'Final Video Ready',
-                'progress_pct': 100.0,
-                'next_url': f"/output/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': True
-            }
-        elif final_video.status == 'error':
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Assembly Failed - Retry',
-                'progress_pct': 71.4,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
+
+        progress_pct = 0.0
+
+        # Stage 1: Scrape
+        product_status = (self.status or '').lower()
+        scrape_complete = bool(self.scraped_data) or product_status not in ('', 'pending', 'error')
+        if scrape_complete:
+            set_stage_state('scrape', 'complete', 'Product scraped', enabled=True)
+            progress_pct = stage_progress['scrape']
         else:
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Assembling Video...',
-                'progress_pct': 85.7,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
+            set_stage_state('scrape', 'current', 'Scrape a product URL to begin', enabled=True)
+            return build_response('scrape', 'Scrape a product to get started', 0.0)
+
+        # Stage 2: Spec / Use Case
+        if not use_case:
+            set_stage_state('spec', 'current', 'Set up your first use case', enabled=True)
+            return build_response('spec', 'Configure your use case details', progress_pct)
+        else:
+            set_stage_state('spec', 'complete', f'Use case: {use_case.name}', enabled=True)
+            progress_pct = max(progress_pct, stage_progress['spec'])
+
+        # Stage 3: Hook
+        if not hook:
+            set_stage_state('hook', 'current', 'Generate hook concepts', enabled=True)
+            return build_response('hook', 'Choose your hook style', progress_pct)
+
+        hook_status = (hook.status or '').lower()
+        if hook_status == 'failed':
+            summary = hook.error_message or 'Hook previews failed'
+            set_stage_state('hook', 'current', summary, enabled=True)
+            return build_response('hook', summary, progress_pct)
+
+        if not (hook.image_paths or []):
+            set_stage_state('hook', 'current', 'Generate preview assets', enabled=True)
+            return build_response('hook', 'Generate hook previews', progress_pct)
+
+        if hook.winning_variant_index is None:
+            set_stage_state('hook', 'current', 'Select your winning variant', enabled=True)
+            return build_response('hook', 'Select your favorite hook', stage_progress['hook'])
+
+        hook_summary = 'Hook animated' if hook_status == 'complete' else 'Hook selected'
+        if hook_status == 'animating':
+            hook_summary = 'Hook animation in progress'
+        set_stage_state('hook', 'complete', hook_summary, enabled=True)
+        progress_pct = max(progress_pct, stage_progress['hook'])
+
+        # Stage 4: Script
+        if not script:
+            set_stage_state('script', 'current', 'Generate your script', enabled=True)
+            return build_response('script', 'Generate a script for this use case', progress_pct)
+
+        script_status = (script.status or '').lower()
+        if script_status != 'approved':
+            set_stage_state('script', 'current', 'Review and approve the script', enabled=True)
+            mid_progress = stage_progress['hook'] + 5.0
+            return build_response('script', 'Script pending approval', mid_progress)
+
+        set_stage_state('script', 'complete', 'Script approved', enabled=True)
+        progress_pct = max(progress_pct, stage_progress['script'])
+
+        # Stage 5: Video (clip generation)
+        clip_ratio = 1.0 if target_clips <= 0 else len(complete_clips) / max(target_clips, 1)
+
+        if clip_ratio < 1.0:
+            if error_clips:
+                label = f"Video - {len(error_clips)} error(s)"
+            elif pending_clips:
+                label = f"Video - {len(complete_clips)}/{target_clips} clips ready"
+            else:
+                label = 'Video - Starting generation'
+
+            set_stage_state('video', 'current', label, enabled=True)
+
+            clip_progress = clip_ratio * (stage_progress['video'] - stage_progress['script'])
+            return build_response('video', label, stage_progress['script'] + clip_progress)
+
+        set_stage_state('video', 'complete', 'All required clips complete', enabled=True)
+        progress_pct = max(progress_pct, stage_progress['video'])
+
+        # Stage 6: Assembly
+        if not final_video:
+            set_stage_state('assembly', 'current', 'Ready for assembly', enabled=True)
+            return build_response('assembly', 'Ready for assembly', progress_pct)
+
+        final_status = (final_video.status or '').lower()
+        if final_status == 'error':
+            set_stage_state('assembly', 'current', 'Assembly failed - retry', enabled=True)
+            return build_response('assembly', 'Assembly failed - retry needed', progress_pct)
+        elif final_status in ('pending', 'assembling'):
+            set_stage_state('assembly', 'current', 'Assembling video...', enabled=True)
+            return build_response('assembly', 'Assembling video...', stage_progress['assembly'] - 5.0)
+
+        set_stage_state('assembly', 'complete', 'Assembly finished', enabled=True)
+        progress_pct = max(progress_pct, stage_progress['assembly'])
+
+        # Stage 7: Output
+        if final_status == 'complete':
+            set_stage_state('output', 'complete', 'Final video ready', enabled=True)
+            return build_response('output', 'Final video ready to download', stage_progress['output'], is_complete=True)
+
+        set_stage_state('output', 'current', 'Finalize output', enabled=True)
+        return build_response('output', 'Prepare final output', progress_pct)
+
 
 class UseCase(db.Model):
     """Use case configuration for video generation."""
@@ -234,6 +355,7 @@ class UseCase(db.Model):
     scripts = db.relationship('Script', backref='use_case', lazy=True, cascade='all, delete-orphan')
     video_clips = db.relationship('VideoClip', backref='use_case', lazy=True, cascade='all, delete-orphan')
     final_videos = db.relationship('FinalVideo', backref='use_case', lazy=True, cascade='all, delete-orphan')
+    hook = db.relationship('Hook', back_populates='use_case', uselist=False, cascade='all, delete-orphan')
     
     def __repr__(self):
         return f'<UseCase {self.name}>'
@@ -283,6 +405,54 @@ class UseCase(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+
+class Hook(db.Model):
+    """Stores hook configurations and generated assets for a use case."""
+
+    __tablename__ = 'hooks'
+
+    id = db.Column(db.Integer, primary_key=True)
+    use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=False, unique=True)
+
+    # User selection metadata
+    hook_type = db.Column(db.String(50), nullable=False)
+    winning_variant_index = db.Column(db.Integer, nullable=True)
+
+    # Generated content
+    variants = db.Column(db.JSON, default=list)  # [{verbal, on_screen, visual}, ...]
+    image_paths = db.Column(db.JSON, default=list)
+    audio_path = db.Column(db.String(500))
+    video_path = db.Column(db.String(500))
+
+    # Status handling
+    status = db.Column(db.String(20), default='draft')  # draft, preview_ready, animating, complete, failed
+    error_message = db.Column(db.Text)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship back to use case
+    use_case = db.relationship('UseCase', back_populates='hook')
+
+    def __repr__(self):
+        return f'<Hook use_case={self.use_case_id} type={self.hook_type}>'
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'use_case_id': self.use_case_id,
+            'hook_type': self.hook_type,
+            'winning_variant_index': self.winning_variant_index,
+            'variants': self.variants or [],
+            'image_paths': self.image_paths or [],
+            'audio_path': self.audio_path,
+            'video_path': self.video_path,
+            'status': self.status,
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
 
 class Script(db.Model):
     """Voiceover script for video."""

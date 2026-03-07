@@ -446,8 +446,8 @@ function renderUseCases() {
                     <span class="ms-2">${uc.voice_id ? `<i class="bi bi-mic-fill text-primary me-1"></i>${escapeHtml(getVoiceName(uc.voice_id))}` : '<span class="text-muted"><i class="bi bi-mic-mute me-1"></i>Not selected</span>'}</span>
                 </div>
                 <div class="mt-3 pt-3 border-top">
-                    <a href="/script/${uc.id}" class="btn btn-primary btn-sm w-100">
-                        <i class="bi bi-file-text me-1"></i>${uc.status === 'generating' || uc.status === 'complete' ? 'View Script' : 'Generate Script'}
+                    <a href="/hook/${uc.id}" class="btn btn-primary btn-sm w-100">
+                        <i class="bi bi-stars me-1"></i>Hook Studio
                     </a>
                 </div>
             </div>

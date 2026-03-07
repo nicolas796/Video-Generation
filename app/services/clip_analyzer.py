@@ -6,8 +6,12 @@ from textwrap import dedent
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-import cv2
 import requests
+
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
 
 from app import db
 from app.models import VideoClip
@@ -324,6 +328,8 @@ class ClipAnalyzer:
         Default is 1 frame (middle of video) to reduce API cost and timeout risk.
         Increase max_frames if you need more temporal context.
         """
+        if cv2 is None:
+            return []
         frames: List[str] = []
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -353,6 +359,8 @@ class ClipAnalyzer:
             return base64.b64encode(file.read()).decode('utf-8')
 
     def _encode_frame(self, frame) -> Optional[str]:
+        if cv2 is None:
+            return None
         # Resize large frames to reduce API payload size and prevent timeouts
         max_dimension = 720  # Max width or height
         h, w = frame.shape[:2]
