@@ -1,5 +1,7 @@
 """Async video assembly tasks using Celery."""
 import os
+import json
+import subprocess
 from typing import Any, Dict, Optional
 
 from celery import states
@@ -7,7 +9,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from flask import current_app
 
 from app import db
-from app.models import UseCase, Script, VideoClip
+from app.models import UseCase, Script, VideoClip, Hook
 from app.celery_app import celery
 
 
@@ -493,4 +495,211 @@ def generate_clips_batch_async(
     except Exception as exc:
         db.session.rollback()
         current_app.logger.exception(f"Batch generation failed for use_case {use_case_id}")
+        raise
+
+
+def _resolve_media_path(candidate: Optional[str], upload_root: str) -> Optional[str]:
+    """Convert relative upload paths to absolute paths."""
+    if not candidate:
+        return None
+    if os.path.isabs(candidate):
+        return candidate
+    return os.path.join(upload_root, candidate)
+
+
+def _probe_media_duration(media_path: Optional[str], ffprobe_path: str) -> Optional[float]:
+    """Return media duration using ffprobe when available."""
+    if not media_path or not os.path.exists(media_path):
+        return None
+    try:
+        result = subprocess.run(
+            [
+                ffprobe_path,
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                media_path
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        return round(float(result.stdout.strip()), 2)
+    except Exception:
+        return None
+
+
+def _ensure_hook_folder(upload_root: str, hook_id: int) -> str:
+    folder = os.path.join(upload_root, 'hooks', str(hook_id))
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+@celery.task(bind=True, max_retries=0)
+def generate_hook_video(
+    self,
+    hook_id: int,
+    image_path: Optional[str] = None,
+    audio_path: Optional[str] = None,
+    variant_index: Optional[int] = None,
+    upload_root: Optional[str] = None,
+    duration_seconds: float = 5.0,
+    options: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Create a short animated hook preview with subtle motion."""
+    options = options or {}
+    upload_folder = os.path.abspath(upload_root or current_app.config.get('UPLOAD_FOLDER', './uploads'))
+    ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
+    ffprobe_path = current_app.config.get('FFPROBE_PATH') or ffmpeg_path.replace('ffmpeg', 'ffprobe')
+
+    format_key = (options.get('format') or '9:16').strip()
+    dimensions = {
+        '9:16': (1080, 1920),
+        '16:9': (1920, 1080),
+        '1:1': (1080, 1080),
+        '4:5': (1080, 1350)
+    }
+    width, height = dimensions.get(format_key, (1080, 1920))
+    fps = max(12, min(int(options.get('fps', 30)), 60))
+    min_duration = max(3.0, float(duration_seconds or 5.0))
+
+    def mark_failed(message: str) -> None:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        hook_obj = db.session.get(Hook, hook_id)
+        if not hook_obj:
+            return
+        hook_obj.status = 'failed'
+        hook_obj.error_message = message
+        db.session.commit()
+
+    try:
+        hook = db.session.get(Hook, hook_id)
+        if not hook:
+            raise ValueError(f'Hook {hook_id} not found')
+
+        selected_variant = variant_index if variant_index is not None else hook.winning_variant_index
+        if selected_variant is None:
+            raise ValueError('Hook does not have a selected variant yet')
+
+        variant_images = hook.image_paths or []
+        variant_index_safe = int(selected_variant)
+        if variant_index_safe < 0 or variant_index_safe >= len(variant_images):
+            raise ValueError('Selected hook variant is missing a preview image')
+
+        resolved_image = _resolve_media_path(image_path or variant_images[variant_index_safe], upload_folder)
+        resolved_audio = _resolve_media_path(audio_path, upload_folder)
+        if not resolved_image or not os.path.exists(resolved_image):
+            raise FileNotFoundError('Hook preview image missing on disk')
+
+        if not resolved_audio or not os.path.exists(resolved_audio):
+            manifest_path = _resolve_media_path(hook.audio_path, upload_folder)
+            relative_audio = None
+            if manifest_path and os.path.exists(manifest_path):
+                try:
+                    with open(manifest_path, 'r', encoding='utf-8') as handle:
+                        manifest = json.load(handle)
+                    relative_audio = manifest.get(str(variant_index_safe))
+                except (OSError, json.JSONDecodeError):
+                    relative_audio = None
+            resolved_audio = _resolve_media_path(relative_audio, upload_folder)
+
+        if not resolved_audio or not os.path.exists(resolved_audio):
+            raise FileNotFoundError('Hook audio file missing. Regenerate previews and try again.')
+
+        hook.status = 'animating'
+        hook.error_message = None
+        hook.video_path = None
+        db.session.commit()
+
+        self.update_state(
+            state=states.STARTED,
+            meta={'hook_id': hook.id, 'step': 'preparing', 'message': 'Preparing assets'}
+        )
+
+        audio_duration = _probe_media_duration(resolved_audio, ffprobe_path)
+        target_duration = max(min_duration, audio_duration or 0.0)
+        frame_count = max(int(target_duration * fps), fps)
+        pad_seconds = max(target_duration - (audio_duration or 0.0), 0.0)
+
+        hook_folder = _ensure_hook_folder(upload_folder, hook.id)
+        output_filename = f'hook_variant_{variant_index_safe + 1}_animation.mp4'
+        output_path = os.path.join(hook_folder, output_filename)
+
+        zoom_speed = float(options.get('zoom_speed', 0.0008))
+        zoom_speed = max(0.0002, min(zoom_speed, 0.0025))
+
+        filter_parts = [
+            (
+                f"[0:v]scale={width}:{height}:force_original_aspect_ratio=cover,"
+                f"crop={width}:{height},"
+                f"zoompan=z='if(eq(on,1),1.05,min(1.12,zoom+{zoom_speed}))':d={frame_count}:"
+                f"s={width}x{height},fps={fps},format=yuv420p[kv]"
+            )
+        ]
+
+        audio_label = '1:a:0'
+        if pad_seconds > 0.05:
+            filter_parts.append(f"[1:a]apad=pad_dur={pad_seconds:.2f}[aud]")
+            audio_label = '[aud]'
+
+        filter_complex = ';'.join(filter_parts)
+
+        self.update_state(
+            state='PROGRESS',
+            meta={'hook_id': hook.id, 'step': 'rendering', 'message': 'Rendering animation'}
+        )
+
+        cmd = [
+            ffmpeg_path,
+            '-y',
+            '-loop', '1',
+            '-i', resolved_image,
+            '-i', resolved_audio,
+            '-filter_complex', filter_complex,
+            '-map', '[kv]',
+            '-map', audio_label,
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-t', f"{target_duration:.2f}",
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-movflags', '+faststart'
+        ]
+
+        if pad_seconds > 0.05:
+            cmd.append('-shortest')
+
+        cmd.append(output_path)
+
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or b'').decode('utf-8', errors='ignore')
+            raise RuntimeError(f'Hook animation failed: {stderr[:200]}') from exc
+
+        rel_path = os.path.relpath(output_path, upload_folder).replace('\\\\', '/')
+        hook = db.session.get(Hook, hook.id)
+        hook.video_path = rel_path
+        hook.status = 'complete'
+        hook.error_message = None
+        db.session.commit()
+
+        return {
+            'success': True,
+            'hook_id': hook.id,
+            'video_path': hook.video_path,
+            'duration': target_duration,
+            'width': width,
+            'height': height
+        }
+
+    except SoftTimeLimitExceeded:
+        mark_failed('Hook animation timed out. Please retry.')
+        raise
+    except Exception as exc:
+        mark_failed(str(exc))
         raise

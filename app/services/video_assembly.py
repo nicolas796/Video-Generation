@@ -7,7 +7,10 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency in some environments
+    cv2 = None
 
 from app import db
 from app.models import UseCase, VideoClip, FinalVideo, Script
@@ -391,6 +394,8 @@ class VideoAssembler:
         return current
 
     def _generate_thumbnail(self, video_path: str, use_case_id: int) -> Optional[str]:
+        if cv2 is None:
+            return None
         try:
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():

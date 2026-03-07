@@ -7,7 +7,7 @@ services:
     
     # Build and start commands
     buildCommand: "./build.sh"
-    startCommand: "./start.sh"
+    startCommand: "gunicorn app:app --bind 0.0.0.0:$PORT --worker-class gevent --workers 1 --timeout 600 --keep-alive 2 --max-requests 500"
     
     # Health check endpoint
     healthCheckPath: /health
@@ -50,6 +50,9 @@ services:
       - key: MOONSHOT_API_KEY
         sync: false
       
+      - key: FLUX_API_KEY
+        sync: false
+      
       - key: POLLO_WEBHOOK_SECRET
         sync: false
       
@@ -76,6 +79,65 @@ services:
       mountPath: /var/data
       sizeGB: 10
 
+  # Celery Worker Service (background task processor)
+  - type: worker
+    name: video-generator-worker
+    runtime: python
+    plan: standard
+    
+    buildCommand: "./build.sh"
+    startCommand: "celery -A app.celery_app.celery worker --loglevel=info --concurrency=1"
+    
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      
+      - key: DATABASE_URL
+        fromDatabase:
+          name: product-video-db
+          property: connectionString
+      
+      # Explicit Redis URL for Celery broker
+      - key: REDIS_URL
+        value: "redis://red-d6hqhb1drdic73cq0pn0:6379/0"
+      
+      - key: FLASK_ENV
+        value: production
+      
+      - key: FLASK_DEBUG
+        value: "false"
+      
+      - key: RENDER_DISK_MOUNT_PATH
+        value: /var/data
+      
+      - key: SECRET_KEY
+        generateValue: true
+      
+      - key: POLLO_API_KEY
+        sync: false
+      
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      
+      - key: MOONSHOT_API_KEY
+        sync: false
+      
+      - key: FLUX_API_KEY
+        sync: false
+      
+      - key: POLLO_WEBHOOK_SECRET
+        sync: false
+      
+      - key: ADMIN_USERNAME
+        value: admin
+      
+      - key: ADMIN_PASSWORD
+        generateValue: true
+    
+    disk:
+      name: video-uploads
+      mountPath: /var/data
+      sizeGB: 10
 
 # PostgreSQL Database
 databases:

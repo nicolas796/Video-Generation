@@ -1,7 +1,7 @@
 import os
 from flask_migrate import Migrate
 from app import create_app, db
-from app.models import Product, UseCase, Script, VideoClip, FinalVideo, ActivityLog, User
+from app.models import Product, UseCase, Script, VideoClip, FinalVideo, ActivityLog, User, Hook
 
 app = create_app()
 
@@ -15,7 +15,8 @@ def make_shell_context():
         'VideoClip': VideoClip,
         'FinalVideo': FinalVideo,
         'ActivityLog': ActivityLog,
-        'User': User
+        'User': User,
+        'Hook': Hook
     }
 
 if __name__ == '__main__':

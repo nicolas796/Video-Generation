@@ -4,16 +4,17 @@ import uuid
 import hmac
 import hashlib
 import json
+import shutil
+import subprocess
 from datetime import datetime
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, List
 
 import requests
-from flask import Blueprint, render_template, jsonify, request, current_app, send_from_directory, url_for, abort, g
+from flask import Blueprint, render_template, jsonify, request, current_app, send_from_directory, url_for, abort
 from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
-from app.models import Product, UseCase, Script, VideoClip, FinalVideo, ClipLibrary, UseCaseLibraryClip, ActivityLog
+from app.models import Product, UseCase, Script, VideoClip, FinalVideo, ClipLibrary, UseCaseLibraryClip, Hook
 from app import db
-from app.brand_context import require_brand, record_usage
 from app.scrapers import scrape_product
 from app.services.script_gen import ScriptGenerator
 from app.services.video_clip_manager import VideoClipManager
@@ -23,7 +24,9 @@ from app.services.clip_ordering import ClipOrderingEngine
 from app.services.voiceover import VoiceoverGenerator
 from app.services.video_assembly import VideoAssembler
 from app.services.smart_assembly import SmartVideoAssembler
-from app.services.pipeline_progress import PipelineProgressTracker, PipelineRecoveryService
+from app.services.pipeline_progress import PipelineProgressTracker, PipelineRecoveryService, build_hook_script_payload
+from app.services.hook_generator import HookGenerator, HOOK_TEMPLATES
+from app.services.hook_image_generator import HookImageGenerator
 
 from app.utils.clip_assets import download_clip_assets
 
@@ -183,219 +186,313 @@ def _verify_pollo_signature(secret: str, provided_signature: Optional[str], raw_
 
 
 
+def _build_hook_product_payload(product: Product, use_case: UseCase) -> Dict[str, Any]:
+    specs = product.specifications or {}
+    payload = {
+        'name': product.name,
+        'description': product.description,
+        'brand': product.brand,
+        'specifications': specs,
+        'images': product.images or [],
+        'price': product.price,
+        'currency': product.currency,
+        'target_audience': use_case.target_audience or specs.get('Audience') or '',
+        'goal': use_case.goal,
+    }
+    return payload
+
+
+def _get_upload_root() -> str:
+    return os.path.abspath(current_app.config.get('UPLOAD_FOLDER', './uploads'))
+
+
+def _hook_folder_path(hook_id: int) -> str:
+    return os.path.join(_get_upload_root(), 'hooks', str(hook_id))
+
+
+def _ensure_clean_hook_folder(hook_id: int) -> str:
+    folder = _hook_folder_path(hook_id)
+    if os.path.exists(folder):
+        shutil.rmtree(folder, ignore_errors=True)
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+def _relative_upload_path(abs_path: str) -> str:
+    if not abs_path:
+        return ''
+    upload_root = _get_upload_root()
+    try:
+        return os.path.relpath(abs_path, upload_root)
+    except ValueError:
+        return abs_path
+
+
+def _upload_url(relative_path: Optional[str]) -> Optional[str]:
+    if not relative_path:
+        return None
+    return f"/uploads/{relative_path.replace(os.sep, '/')}"
+
+
+def _create_silent_audio(output_path: str, duration: float = 4.0) -> None:
+    ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    cmd = [
+        ffmpeg_path,
+        '-y',
+        '-f', 'lavfi',
+        '-i', 'anullsrc=r=44100:cl=mono',
+        '-t', str(max(duration, 1.5)),
+        '-q:a', '9',
+        output_path
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception:
+        with open(output_path, 'wb') as handle:
+            handle.write(b'')
+
+
+def _synthesize_hook_audio(text: str, voice_id: Optional[str], voice_settings: Optional[Dict[str, Any]], output_path: str) -> bool:
+    api_key = current_app.config.get('ELEVENLABS_API_KEY')
+    if not api_key or not text:
+        return False
+    payload = {
+        'text': text,
+        'model_id': 'eleven_multilingual_v2',
+        'voice_settings': voice_settings or {
+            'stability': 0.5,
+            'similarity_boost': 0.75,
+            'style': 0.0,
+            'use_speaker_boost': True
+        }
+    }
+    voice = voice_id or os.getenv('DEFAULT_VOICE_ID') or 'XB0fDUnXU5powFXDhCwa'
+    headers = {'xi-api-key': api_key, 'Content-Type': 'application/json'}
+    try:
+        response = requests.post(
+            f'https://api.elevenlabs.io/v1/text-to-speech/{voice}',
+            headers=headers,
+            json=payload,
+            timeout=60
+        )
+        response.raise_for_status()
+        with open(output_path, 'wb') as audio_file:
+            audio_file.write(response.content)
+        return True
+    except Exception as exc:
+        current_app.logger.warning('Hook audio synthesis failed: %s', exc)
+        return False
+
+
+def _generate_hook_audio_manifest(
+    variants: List[Dict[str, Any]],
+    hook_id: int,
+    hook_folder: str,
+    voice_id: Optional[str],
+    voice_settings: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    upload_root = _get_upload_root()
+    manifest: Dict[str, str] = {}
+    for idx, variant in enumerate(variants or []):
+        text = (variant.get('verbal') or variant.get('on_screen') or 'Discover our latest drop!').strip()
+        filename = f'hook_variant_{idx + 1}.mp3'
+        output_path = os.path.join(hook_folder, filename)
+        success = _synthesize_hook_audio(text, voice_id, voice_settings, output_path)
+        if not success:
+            _create_silent_audio(output_path, duration=4.0)
+        manifest[str(idx)] = _relative_upload_path(output_path).replace('\\', '/')
+    manifest_path = os.path.join(hook_folder, 'audio_manifest.json')
+    with open(manifest_path, 'w', encoding='utf-8') as manifest_file:
+        json.dump(manifest, manifest_file, indent=2)
+    return {
+        'manifest_path': _relative_upload_path(manifest_path),
+        'manifest': manifest
+    }
+
+
+def _load_audio_manifest(relative_path: Optional[str]) -> Dict[str, str]:
+    if not relative_path:
+        return {}
+    upload_root = _get_upload_root()
+    manifest_path = os.path.join(upload_root, relative_path)
+    if not os.path.exists(manifest_path):
+        return {}
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as manifest_file:
+            return json.load(manifest_file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _probe_media_duration(media_path: str) -> Optional[float]:
+    if not media_path or not os.path.exists(media_path):
+        return None
+    ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
+    ffprobe_path = current_app.config.get('FFPROBE_PATH') or ffmpeg_path.replace('ffmpeg', 'ffprobe')
+    cmd = [
+        ffprobe_path,
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        media_path
+    ]
+    try:
+        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return float(result.stdout.strip())
+    except Exception:
+        return None
+
+
 @main_bp.route('/')
 @login_required
-@require_brand
 def index():
     """Home page with pipeline visualization."""
     return render_template('index.html')
 
 
+
+
+def _build_default_pipeline_overview():
+    """Return a placeholder pipeline structure when no products exist."""
+    stage_defs = [
+        ('scrape', 'Scrape', 'Start by scraping a product URL', '/scrape', 12.5),
+        ('spec', 'Spec', 'Configure your first use case', None, 25.0),
+        ('hook', 'Hook', 'Choose and test your hook', None, 40.0),
+        ('script', 'Script', 'Generate and approve your script', None, 55.0),
+        ('video', 'Video', 'Generate the required clips', None, 75.0),
+        ('assembly', 'Assembly', 'Assemble clips with audio', None, 90.0),
+        ('output', 'Output', 'Download your final video', None, 100.0)
+    ]
+
+    steps = []
+    for key, label, description, url, progress in stage_defs:
+        steps.append({
+            'key': key,
+            'label': label,
+            'description': description,
+            'summary': description,
+            'status': 'current' if key == 'scrape' else 'pending',
+            'url': url,
+            'enabled': url is not None,
+            'progress_pct': progress
+        })
+
+    return {
+        'current_stage': 'scrape',
+        'stage_label': 'Start by scraping a product URL',
+        'progress_pct': 0.0,
+        'next_url': '/scrape',
+        'use_case_id': None,
+        'use_case_name': None,
+        'is_complete': False,
+        'pipeline_steps': steps,
+        'clip_stats': {'complete': 0, 'errors': 0, 'pending': 0, 'target': 0},
+        'final_video_status': None
+    }
+
+
+def _collect_dashboard_snapshot(limit: int = 10) -> dict:
+    """Aggregate stats + pipeline data for the dashboard JSON endpoints."""
+    products = Product.query.order_by(
+        Product.updated_at.desc(),
+        Product.created_at.desc()
+    ).limit(limit).all()
+
+    rows = []
+    for product in products:
+        try:
+            stage_info = product.get_current_stage_info()
+        except Exception as exc:  # pragma: no cover - diagnostic log
+            current_app.logger.exception('Failed to build pipeline info for product %s: %s', product.id, exc)
+            stage_info = _build_default_pipeline_overview()
+
+        summary = {
+            'product': product.to_dict(),
+            'product_id': product.id,
+            'product_name': product.name,
+            'use_case_count': len(product.use_cases),
+            'use_case_id': stage_info.get('use_case_id'),
+            'use_case_name': stage_info.get('use_case_name'),
+            'current_stage': stage_info.get('current_stage'),
+            'stage_label': stage_info.get('stage_label'),
+            'progress_pct': stage_info.get('progress_pct'),
+            'next_url': stage_info.get('next_url'),
+            'updated_at': product.updated_at.isoformat() if product.updated_at else None,
+            'created_at': product.created_at.isoformat() if product.created_at else None
+        }
+        rows.append({'summary': summary, 'stage': stage_info})
+
+    stats = {
+        'total_products': Product.query.count(),
+        'total_use_cases': UseCase.query.count(),
+        'total_clips': VideoClip.query.count(),
+        'total_final_videos': FinalVideo.query.filter_by(status='complete').count()
+    }
+
+    active_rows = [item for item in rows if not item['stage'].get('is_complete')]
+    active_projects_full = [
+        {
+            'product_id': item['summary']['product_id'],
+            'product_name': item['summary']['product_name'],
+            'use_case_id': item['summary']['use_case_id'],
+            'use_case_name': item['summary']['use_case_name'],
+            'current_stage': item['stage'].get('current_stage'),
+            'stage_label': item['stage'].get('stage_label'),
+            'progress_pct': item['stage'].get('progress_pct'),
+            'next_url': item['stage'].get('next_url'),
+            'updated_at': item['summary']['updated_at'],
+            'clip_stats': item['stage'].get('clip_stats', {}),
+            'pipeline_steps': item['stage'].get('pipeline_steps', [])
+        }
+        for item in active_rows
+    ]
+
+    recent_products = [item['summary'] for item in rows[:5]]
+
+    pipeline_source = active_rows[0] if active_rows else (rows[0] if rows else None)
+    if pipeline_source:
+        pipeline_overview = pipeline_source['stage']
+        pipeline_project = {
+            'product_id': pipeline_source['summary']['product_id'],
+            'product_name': pipeline_source['summary']['product_name'],
+            'use_case_id': pipeline_source['summary']['use_case_id'],
+            'use_case_name': pipeline_source['summary']['use_case_name']
+        }
+    else:
+        pipeline_overview = _build_default_pipeline_overview()
+        pipeline_project = None
+
+    return {
+        'stats': stats,
+        'active_projects': active_projects_full[:3],
+        'active_project_total': len(active_projects_full),
+        'recent_products': recent_products,
+        'has_active_projects': len(active_projects_full) > 0,
+        'pipeline': pipeline_overview,
+        'pipeline_project': pipeline_project
+    }
+
 @main_bp.route('/api/dashboard/status')
 @login_required
 def get_dashboard_status():
-    """Get user's dashboard status including active projects and progress."""
-    from app.services.pipeline_progress import PipelineProgressTracker
-    
-    # Get brand's products with their use cases
-    brand_id = g.current_brand.id if g.get('current_brand') else None
-    query = Product.query
-    if brand_id:
-        query = query.filter_by(brand_id=brand_id)
-    products = query.order_by(Product.created_at.desc()).limit(10).all()
-    
-    # Build product progress data
-    product_progress = []
-    active_projects = []
+    """Get dashboard snapshot including stats, projects, and pipeline."""
+    snapshot = _collect_dashboard_snapshot()
+    payload = {'success': True}
+    payload.update(snapshot)
+    return jsonify(payload)
 
-    # Stage order for progress calculation: scrape -> spec -> usecase -> script -> video_gen -> assembly -> output
-    # Progress percentages: 0, 14.3, 28.6, 42.9, 57.1, 71.4, 85.7, 100
-    def get_stage_info(product, use_cases):
-        """Determine current stage info for a product."""
-        if not use_cases:
-            return {
-                'current_stage': 'usecase',
-                'stage_label': 'Scraped - Needs Use Case',
-                'progress_pct': 14.3,
-                'next_url': f"/use-case/{product.id}",
-                'use_case_id': None,
-                'use_case_name': None,
-                'is_complete': False
-            }
-        
-        use_case = use_cases[0]
-        pipeline = PipelineProgressTracker.summarize(use_case)
-        
-        # Check if project is complete (has final video)
-        is_complete = pipeline['has_final_video']
-        
-        # Check script status
-        script = Script.query.filter_by(use_case_id=use_case.id).first()
-        
-        if not script:
-            return {
-                'current_stage': 'script',
-                'stage_label': 'Needs Script',
-                'progress_pct': 28.6,
-                'next_url': f"/script/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-        
-        if script.status != 'approved':
-            return {
-                'current_stage': 'script',
-                'stage_label': 'Script Pending Approval',
-                'progress_pct': 42.9,
-                'next_url': f"/script/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-        
-        # Check video clips status
-        clips = VideoClip.query.filter_by(use_case_id=use_case.id).all()
-        complete_clips = [c for c in clips if c.status == 'complete']
-        error_clips = [c for c in clips if c.status == 'error']
-        pending_clips = [c for c in clips if c.status in ('pending', 'generating')]
-        
-        target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
-        
-        # If not all clips are complete, we're in video_gen stage
-        if len(complete_clips) < target_clips:
-            if error_clips:
-                label = f'Video Gen - {len(error_clips)} Error(s)'
-            elif pending_clips:
-                label = f'Video Gen - {len(complete_clips)}/{target_clips} Complete'
-            else:
-                label = 'Video Gen - Starting'
-            
-            clip_progress = (len(complete_clips) / max(target_clips, 1)) * 14.3
-            
-            return {
-                'current_stage': 'video_gen',
-                'stage_label': label,
-                'progress_pct': 42.9 + clip_progress,
-                'next_url': f"/video-gen/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-        
-        # All clips complete - check assembly status
-        final_video = FinalVideo.query.filter_by(use_case_id=use_case.id).order_by(FinalVideo.created_at.desc()).first()
-        
-        if not final_video:
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Ready for Assembly',
-                'progress_pct': 71.4,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-        
-        if final_video.status == 'complete':
-            return {
-                'current_stage': 'output',
-                'stage_label': 'Final Video Ready',
-                'progress_pct': 100.0,
-                'next_url': f"/output/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': True
-            }
-        elif final_video.status == 'error':
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Assembly Failed - Retry',
-                'progress_pct': 71.4,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-        else:
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Assembling Video...',
-                'progress_pct': 85.7,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
 
-    for product in products:
-        product_data = product.to_dict()
-        use_cases = UseCase.query.filter_by(product_id=product.id).order_by(UseCase.created_at.desc()).all()
-        
-        # Get stage info using the product's own method if available, otherwise calculate
-        if hasattr(product, 'get_current_stage_info') and callable(getattr(product, 'get_current_stage_info')):
-            try:
-                stage_info = product.get_current_stage_info()
-            except Exception:
-                stage_info = get_stage_info(product, use_cases)
-        else:
-            stage_info = get_stage_info(product, use_cases)
-        
-        # Add to active projects if not complete
-        if not stage_info['is_complete']:
-            active_projects.append({
-                'product_id': product.id,
-                'product_name': product.name,
-                'use_case_id': stage_info['use_case_id'],
-                'use_case_name': stage_info['use_case_name'],
-                'current_stage': stage_info['current_stage'],
-                'stage_label': stage_info['stage_label'],
-                'progress_pct': stage_info['progress_pct'],
-                'next_url': stage_info['next_url'],
-                'updated_at': product.updated_at.isoformat() if product.updated_at else None
-            })
-        
-        product_progress.append({
-            'product': product_data,
-            'current_stage': stage_info['current_stage'],
-            'stage_label': stage_info['stage_label'],
-            'progress_pct': stage_info['progress_pct'],
-            'next_url': stage_info['next_url'],
-            'use_case_count': len(use_cases),
-            'use_case_id': stage_info['use_case_id'],
-            'use_case_name': stage_info['use_case_name']
-        })
-    
-    # Calculate stats (scoped by brand)
-    if brand_id:
-        total_products = Product.query.filter_by(brand_id=brand_id).count()
-        total_use_cases = UseCase.query.filter_by(brand_id=brand_id).count()
-        total_clips = VideoClip.query.filter_by(brand_id=brand_id).count()
-        total_final_videos = FinalVideo.query.filter_by(brand_id=brand_id, status='complete').count()
-    else:
-        total_products = Product.query.count()
-        total_use_cases = UseCase.query.count()
-        total_clips = VideoClip.query.count()
-        total_final_videos = FinalVideo.query.filter_by(status='complete').count()
-    
-    # Get recent activity (last 5 products)
-    recent_products = product_progress[:5]
-    
-    # Get the most recent product for quick navigation
-    most_recent = product_progress[0] if product_progress else None
-    
+@main_bp.route('/api/dashboard/pipeline')
+@login_required
+def get_dashboard_pipeline():
+    """Return the active pipeline overview for quick polling."""
+    snapshot = _collect_dashboard_snapshot()
     return jsonify({
         'success': True,
-        'stats': {
-            'total_products': total_products,
-            'total_use_cases': total_use_cases,
-            'total_clips': total_clips,
-            'total_final_videos': total_final_videos
-        },
-        'active_projects': active_projects[:3],  # Top 3 active projects
-        'recent_products': recent_products,
-        'has_active_projects': len(active_projects) > 0,
-        'most_recent': most_recent  # For stage navigation
+        'pipeline': snapshot.get('pipeline'),
+        'project': snapshot.get('pipeline_project'),
+        'has_active_projects': snapshot.get('has_active_projects', False)
     })
 
 
@@ -416,11 +513,9 @@ def spec_sheet_page(product_id):
 
 @main_bp.route('/products')
 @login_required
-@require_brand
 def products_list_page():
     """Products list UI page."""
-    brand_id = g.current_brand.id
-    products = Product.query.filter_by(brand_id=brand_id).order_by(Product.created_at.desc()).all()
+    products = Product.query.order_by(Product.created_at.desc()).all()
 
     # Enrich with use case count
     products_data = []
@@ -449,25 +544,21 @@ def api_status():
 
 @main_bp.route('/api/products', methods=['GET'])
 @login_required
-@require_brand
 def get_products():
-    """Get all products for the current brand."""
-    brand_id = g.current_brand.id
-    products = Product.query.filter_by(brand_id=brand_id).order_by(Product.created_at.desc()).all()
+    """Get all products."""
+    products = Product.query.order_by(Product.created_at.desc()).all()
     return jsonify([p.to_dict() for p in products])
 
 
 @main_bp.route('/api/products', methods=['POST'])
 @login_required
-@require_brand
 def create_product():
     """Create a new product."""
     data = request.get_json()
     product = Product(
         name=data.get('name'),
         url=data.get('url'),
-        description=data.get('description'),
-        brand_id=g.current_brand.id,
+        description=data.get('description')
     )
     db.session.add(product)
     db.session.commit()
@@ -546,12 +637,8 @@ def scrape_url():
 
     # Save to database if requested
     if save:
-        brand_id = g.current_brand.id if g.get('current_brand') else None
-        # Check if product already exists (within brand scope)
-        existing_q = Product.query.filter_by(url=scraped_data['url'])
-        if brand_id:
-            existing_q = existing_q.filter_by(brand_id=brand_id)
-        existing = existing_q.first()
+        # Check if product already exists
+        existing = Product.query.filter_by(url=scraped_data['url']).first()
         if existing:
             # Update existing product
             existing.name = scraped_data.get('name', existing.name)
@@ -579,8 +666,7 @@ def scrape_url():
                 specifications=scraped_data.get('specifications', {}),
                 reviews=scraped_data.get('reviews', []),
                 scraped_data=scraped_data.get('raw_data', {}),
-                status='scraped',
-                brand_id=brand_id,
+                status='scraped'
             )
             db.session.add(product)
             db.session.commit()
@@ -871,11 +957,9 @@ def use_case_page(product_id):
 @main_bp.route('/api/use-cases', methods=['GET'])
 @login_required
 def get_all_use_cases():
-    """Get all use cases (optionally filtered by product), scoped by brand."""
+    """Get all use cases (optionally filtered by product)."""
     product_id = request.args.get('product_id', type=int)
     query = UseCase.query
-    if g.get('current_brand'):
-        query = query.filter_by(brand_id=g.current_brand.id)
     if product_id:
         query = query.filter_by(product_id=product_id)
     use_cases = query.order_by(UseCase.created_at.desc()).all()
@@ -909,19 +993,8 @@ def create_use_case(product_id):
     product = Product.query.get_or_404(product_id)
     data = request.get_json()
 
-    brand_id = g.current_brand.id if g.get('current_brand') else None
-
-    # Ensure the product belongs to the current brand (tenant isolation)
-    if brand_id and product.brand_id and product.brand_id != brand_id:
-        return jsonify({'error': 'Product does not belong to the current brand'}), 403
-
-    generation_mode = (data.get('generation_mode') or 'balanced').strip().lower().replace(' ', '_')
-    if generation_mode not in {'balanced', 'product_accuracy', 'creative_storytelling'}:
-        generation_mode = 'balanced'
-
     use_case = UseCase(
         product_id=product_id,
-        brand_id=product.brand_id or brand_id,
         name=data.get('name', 'New Use Case'),
         format=data.get('format', '9:16'),
         style=data.get('style', 'realistic'),
@@ -1012,6 +1085,228 @@ def duplicate_use_case(use_case_id):
 
 
 # ============================================================================
+# Hook Routes
+# ============================================================================
+
+
+@main_bp.route('/hook/<int:use_case_id>')
+@login_required
+def hook_page(use_case_id):
+    """Hook selection and preview UI page."""
+    use_case = UseCase.query.get_or_404(use_case_id)
+    product = Product.query.get_or_404(use_case.product_id)
+    hook = Hook.query.filter_by(use_case_id=use_case_id).first()
+    return render_template(
+        'hook.html',
+        use_case=use_case,
+        product=product,
+        hook=hook,
+        hook_templates=HOOK_TEMPLATES
+    )
+
+
+@main_bp.route('/api/use-cases/<int:use_case_id>/hook', methods=['POST'])
+@login_required
+def create_or_update_hook(use_case_id):
+    """Create or refresh hook variants for a use case."""
+    use_case = UseCase.query.get_or_404(use_case_id)
+    product = Product.query.get_or_404(use_case.product_id)
+    data = request.get_json() or {}
+    hook_type = (data.get('hook_type') or 'problem-agitation').lower()
+
+    if hook_type not in HOOK_TEMPLATES:
+        return jsonify({'success': False, 'error': f'Invalid hook type: {hook_type}'}), 400
+
+    generator = HookGenerator(api_key=current_app.config.get('OPENAI_API_KEY'))
+    payload = _build_hook_product_payload(product, use_case)
+
+    try:
+        variants = generator.generate_variants(payload, hook_type, count=3)
+    except Exception as exc:  # pragma: no cover - surface to caller
+        current_app.logger.exception('Hook generation failed for use_case %s', use_case_id)
+        return jsonify({'success': False, 'error': f'Hook generation failed: {exc}'}), 500
+
+    hook = Hook.query.filter_by(use_case_id=use_case_id).first()
+    if not hook:
+        hook = Hook(use_case_id=use_case_id)
+        db.session.add(hook)
+        db.session.flush()
+    else:
+        assets_folder = _hook_folder_path(hook.id)
+        if os.path.exists(assets_folder):
+            shutil.rmtree(assets_folder, ignore_errors=True)
+
+    hook.hook_type = hook_type
+    hook.variants = variants
+    hook.image_paths = []
+    hook.audio_path = None
+    hook.video_path = None
+    hook.winning_variant_index = None
+    hook.status = 'draft'
+    hook.error_message = None
+    db.session.commit()
+
+    return jsonify({'success': True, 'hook': hook.to_dict()})
+
+
+@main_bp.route('/api/hooks/<int:hook_id>/generate-previews', methods=['POST'])
+@login_required
+def generate_hook_previews(hook_id):
+    """Generate static preview assets (images + audio) for a hook."""
+    hook = Hook.query.get_or_404(hook_id)
+    use_case = UseCase.query.get_or_404(hook.use_case_id)
+    product = Product.query.get_or_404(use_case.product_id)
+
+    if not hook.variants:
+        return jsonify({'success': False, 'error': 'No hook variants available. Generate hooks first.'}), 400
+
+    hook_folder = _ensure_clean_hook_folder(hook_id)
+    product_payload = _build_hook_product_payload(product, use_case)
+
+    try:
+        image_generator = HookImageGenerator(api_key=current_app.config.get('FLUX_API_KEY'))
+        image_paths = image_generator.generate_preview_images(product_payload, hook.variants, hook_folder)
+    except Exception as exc:
+        current_app.logger.exception('Hook preview image generation failed for hook %s', hook_id)
+        hook.status = 'failed'
+        hook.error_message = f'Image generation failed: {exc}'
+        db.session.commit()
+        return jsonify({'success': False, 'error': f'Image generation failed: {exc}'}), 500
+
+    audio_info = _generate_hook_audio_manifest(
+        hook.variants,
+        hook_id,
+        hook_folder,
+        use_case.voice_id,
+        use_case.voice_settings
+    )
+
+    hook.image_paths = image_paths
+    hook.audio_path = audio_info.get('manifest_path')
+    hook.status = 'preview_ready'
+    hook.error_message = None
+    db.session.commit()
+
+    audio_manifest = {key: _upload_url(value) for key, value in (audio_info.get('manifest') or {}).items()}
+
+    return jsonify({
+        'success': True,
+        'hook_id': hook.id,
+        'status': hook.status,
+        'variants': hook.variants,
+        'image_paths': image_paths,
+        'image_urls': [_upload_url(path) for path in image_paths],
+        'audio_manifest_path': hook.audio_path,
+        'audio_manifest': audio_manifest
+    })
+
+
+@main_bp.route('/api/hooks/<int:hook_id>/select', methods=['POST'])
+@login_required
+def select_hook_variant(hook_id):
+    """Persist the winning hook variant."""
+    hook = Hook.query.get_or_404(hook_id)
+    data = request.get_json() or {}
+    variant_index = data.get('variant_index')
+
+    try:
+        variant_index = int(variant_index)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'error': 'variant_index must be an integer'}), 400
+
+    variants = hook.variants or []
+    if variant_index < 0 or variant_index >= len(variants):
+        return jsonify({'success': False, 'error': 'Variant index out of range'}), 400
+
+    hook.winning_variant_index = variant_index
+    if hook.status not in ('complete', 'animating'):
+        hook.status = 'ready_for_animation'
+    hook.error_message = None
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'hook_id': hook.id,
+        'selected_variant': variants[variant_index]
+    })
+
+
+@main_bp.route('/api/hooks/<int:hook_id>/animate', methods=['POST'])
+@login_required
+def animate_hook(hook_id):
+    """Create a short animated video for the winning hook variant."""
+    hook = Hook.query.get_or_404(hook_id)
+    use_case = hook.use_case or UseCase.query.get(hook.use_case_id)
+    if hook.winning_variant_index is None:
+        return jsonify({'success': False, 'error': 'Select a winning variant before animating.'}), 400
+    if not hook.image_paths:
+        return jsonify({'success': False, 'error': 'Generate previews before animating.'}), 400
+
+    variant_index = hook.winning_variant_index
+    try:
+        image_rel = hook.image_paths[variant_index]
+    except IndexError:
+        return jsonify({'success': False, 'error': 'Missing image for selected variant.'}), 400
+
+    audio_manifest = _load_audio_manifest(hook.audio_path)
+    audio_rel = audio_manifest.get(str(variant_index))
+    if not audio_rel:
+        hook.status = 'failed'
+        hook.error_message = 'Audio preview missing for selected variant.'
+        db.session.commit()
+        return jsonify({'success': False, 'error': hook.error_message}), 400
+
+    upload_root = _get_upload_root()
+    image_path = os.path.join(upload_root, image_rel)
+    audio_path = os.path.join(upload_root, audio_rel)
+    if not os.path.exists(image_path) or not os.path.exists(audio_path):
+        return jsonify({'success': False, 'error': 'Hook assets missing. Regenerate previews.'}), 400
+
+    from app.tasks.video_tasks import generate_hook_video
+
+    hook.video_path = None
+    hook.status = 'animating'
+    hook.error_message = None
+    db.session.commit()
+
+    duration_hint = _probe_media_duration(audio_path) or 5.0
+    task = generate_hook_video.apply_async(kwargs={
+        'hook_id': hook.id,
+        'image_path': image_rel,
+        'audio_path': audio_rel,
+        'variant_index': variant_index,
+        'upload_root': upload_root,
+        'duration_seconds': max(5.0, duration_hint),
+        'options': {
+            'format': (use_case.format if use_case else '9:16') or '9:16',
+            'fps': 30
+        }
+    })
+
+    return jsonify({
+        'success': True,
+        'hook_id': hook.id,
+        'status': hook.status,
+        'task_id': task.id,
+        'message': 'Hook animation queued'
+    }), 202
+
+
+@main_bp.route('/api/hooks/<int:hook_id>/status', methods=['GET'])
+@login_required
+def get_hook_status(hook_id):
+    """Return current hook metadata and asset URLs."""
+    hook = Hook.query.get_or_404(hook_id)
+    audio_manifest = _load_audio_manifest(hook.audio_path)
+    response = hook.to_dict()
+    response['image_urls'] = [_upload_url(path) for path in (hook.image_paths or [])]
+    response['audio_manifest'] = {key: _upload_url(value) for key, value in (audio_manifest or {}).items()}
+    response['audio_manifest_path'] = hook.audio_path
+    response['video_url'] = _upload_url(hook.video_path)
+    return jsonify({'success': True, 'hook': response})
+
+
+# ============================================================================
 # ElevenLabs Voice Routes
 # ============================================================================
 
@@ -1019,8 +1314,7 @@ def duplicate_use_case(use_case_id):
 @login_required
 def get_voices():
     """Get available ElevenLabs voices."""
-    from app.brand_context import get_brand_api_key
-    api_key = get_brand_api_key('elevenlabs') or current_app.config.get('ELEVENLABS_API_KEY')
+    api_key = current_app.config.get('ELEVENLABS_API_KEY')
 
     if not api_key:
         # Return default voice list if no API key
@@ -1073,8 +1367,7 @@ def preview_voice():
     if not voice_id:
         return jsonify({'error': 'Voice ID is required'}), 400
 
-    from app.brand_context import get_brand_api_key
-    api_key = get_brand_api_key('elevenlabs') or current_app.config.get('ELEVENLABS_API_KEY')
+    api_key = current_app.config.get('ELEVENLABS_API_KEY')
     if not api_key:
         return jsonify({'error': 'ElevenLabs API key not configured'}), 500
 
@@ -1164,13 +1457,14 @@ def generate_script_route(use_case_id):
     """Generate a new script for a use case."""
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
+    hook = Hook.query.filter_by(use_case_id=use_case_id).first()
 
     # Check for existing script
     existing_script = Script.query.filter_by(use_case_id=use_case_id).first()
+    existing_content = existing_script.content if existing_script else None
 
-    # Get OpenAI API key (brand-specific or global)
-    from app.brand_context import get_brand_api_key
-    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY')
+    # Get OpenAI API key
+    api_key = current_app.config.get('OPENAI_API_KEY')
     if not api_key:
         return jsonify({'error': 'OPENAI_API_KEY not configured'}), 500
 
@@ -1198,7 +1492,13 @@ def generate_script_route(use_case_id):
         # Generate script
         current_app.logger.info(f"Generating script for use_case {use_case_id}")
         generator = ScriptGenerator(api_key=api_key)
-        result = generator.generate_script(product_data, use_case_config)
+        hook_payload = build_hook_script_payload(hook)
+        result = generator.generate_script(
+            product_data,
+            use_case_config,
+            existing_script=existing_content,
+            hook=hook_payload,
+        )
 
         if not result.get('success'):
             error_msg = result.get('error', 'Script generation failed')
@@ -1287,9 +1587,9 @@ def regenerate_script(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
     product = Product.query.get_or_404(use_case.product_id)
     existing = Script.query.filter_by(use_case_id=use_case_id).first()
+    hook = Hook.query.filter_by(use_case_id=use_case_id).first()
 
-    from app.brand_context import get_brand_api_key
-    api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY')
+    api_key = current_app.config.get('OPENAI_API_KEY')
     if not api_key:
         return jsonify({'error': 'OPENAI_API_KEY not configured'}), 500
 
@@ -1328,10 +1628,12 @@ def regenerate_script(use_case_id):
         else:
             # Generate fresh script
             existing_content = existing.content if existing else None
+            hook_payload = build_hook_script_payload(hook)
             result = generator.generate_script(
                 product_data,
                 use_case_config,
-                existing_script=existing_content
+                existing_script=existing_content,
+                hook=hook_payload
             )
 
         if not result['success']:
@@ -1417,9 +1719,8 @@ def video_gen_page(use_case_id):
 @login_required
 def get_video_models():
     """Get available video generation models."""
-    from app.brand_context import get_brand_api_key
     try:
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         client = PolloAIClient(api_key=api_key)
         models = client.get_available_models()
         return jsonify({'success': True, 'models': models})
@@ -1434,8 +1735,7 @@ def get_video_clips(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
 
     try:
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -1551,8 +1851,7 @@ def generate_scene_image(use_case_id):
         import openai
         import time
 
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return jsonify({'success': False, 'error': 'OpenAI API key not configured'}), 500
 
@@ -1636,8 +1935,7 @@ def _generate_ai_scene_suggestion(product: Product, script: Optional[Any]) -> st
     try:
         import openai
 
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return "Product in lifestyle setting with professional lighting"
 
@@ -1875,8 +2173,7 @@ def _generate_scene_for_clip(use_case, product, script, scene_template, custom_d
 The product "{product_name}" ({product_desc[:80]}) is featured naturally in this scene. Professional photography, photorealistic quality, cinematic composition. No text, no logos, no watermarks. Suitable as a starting frame for video advertisement."""
 
         # Generate image
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('openai') or current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
+        api_key = current_app.config.get('OPENAI_API_KEY') or os.getenv('OPENAI_API_KEY')
         if not api_key:
             return {'success': False, 'error': 'OpenAI API key not configured'}
 
@@ -2057,8 +2354,7 @@ def generate_video_clips(use_case_id):
 
     try:
         data = request.get_json() or {}
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2436,7 +2732,6 @@ def upload_video_clip(use_case_id):
         # Create clip record
         clip = VideoClip(
             use_case_id=use_case_id,
-            brand_id=g.current_brand.id if g.get('current_brand') else None,
             sequence_order=existing_clips,
             prompt=f'User uploaded video - {clip_type}',
             model_used='uploaded',
@@ -2450,9 +2745,8 @@ def upload_video_clip(use_case_id):
 
         # Generate thumbnail
         try:
-            from app.brand_context import get_brand_api_key
             manager = VideoClipManager(
-                api_key=get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY'),
+                api_key=current_app.config.get('POLLO_API_KEY'),
                 upload_folder=current_app.config['UPLOAD_FOLDER']
             )
             thumbnail_path = manager._generate_thumbnail(filepath, use_case_id, clip.id)
@@ -2481,8 +2775,7 @@ def check_clip_status(clip_id):
     clip = VideoClip.query.get_or_404(clip_id)
 
     try:
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2531,8 +2824,7 @@ def regenerate_video_clip(clip_id):
     data = request.get_json() or {}
 
     try:
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2562,8 +2854,7 @@ def test_generate_single_clip():
     script = Script.query.filter_by(use_case_id=use_case_id).first()
 
     try:
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2635,8 +2926,7 @@ def test_generate_single_clip():
 def delete_video_clip(clip_id):
     """Delete a video clip."""
     try:
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2656,8 +2946,7 @@ def reorder_video_clips(use_case_id):
     clip_orders = data.get('clip_orders', [])
 
     try:
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2694,8 +2983,7 @@ def get_generation_stats(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
 
     try:
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -2719,9 +3007,8 @@ def get_generation_stats(use_case_id):
 @login_required
 def get_pollo_credits():
     """Get Pollo.ai credit balance."""
-    from app.brand_context import get_brand_api_key
     try:
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         client = PolloAIClient(api_key=api_key)
         credits = client.get_credit_balance()
         return jsonify(credits)
@@ -2885,8 +3172,7 @@ def update_clip_order(use_case_id):
         if not result.get('success'):
             return jsonify(result), 500
 
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
         clips = manager.get_use_case_clips(use_case_id)
@@ -2932,8 +3218,7 @@ def auto_order_clips(use_case_id):
         if not apply_result.get('success'):
             return jsonify(apply_result), 500
 
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
         clips_response = manager.get_use_case_clips(use_case_id)
@@ -2971,36 +3256,22 @@ def get_assembly_data(use_case_id):
     analyzed_count = len([clip for clip in ordered_clips if clip.get('content_description')])
 
     # Enhanced duration status with smart assembly info
-    # Count both 'complete' (downloaded) and 'ready' (generated, not yet downloaded)
-    # clips as eligible — the assembly worker downloads missing clips automatically.
-    ready_or_complete = stats.get('complete', 0) + sum(
-        1 for clip in ordered_clips
-        if clip.get('status') == 'ready'
-    )
-    has_usable_clips = ready_or_complete > 0
-
     if total_duration < target_duration * 0.5:
-        # Not enough content yet, but if clips are 'ready' their duration
-        # may not be known.  Allow assembly if we have usable clips at all.
         duration_status = 'insufficient'
-        if has_usable_clips:
-            duration_message = f'{ready_or_complete} clips available — duration may increase after download'
-            assembly_ready = True
-        else:
-            duration_message = f'Need {(target_duration - total_duration):.1f}s more content ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
-            assembly_ready = False
+        duration_message = f'Need {(target_duration - total_duration):.1f}s more content ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
+        assembly_ready = False
     elif total_duration < target_duration * 0.8:
         duration_status = 'warning'
         duration_message = f'Could use {(target_duration - total_duration):.1f}s more ({len(ordered_clips)} clips, {total_duration:.1f}s total)'
-        assembly_ready = has_usable_clips
+        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
     elif variance > 5:
         duration_status = 'good'
         duration_message = f'{len(ordered_clips)} clips, {total_duration:.1f}s total - AI will select best segments'
-        assembly_ready = has_usable_clips
+        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
     else:
         duration_status = 'success'
         duration_message = f'{len(ordered_clips)} clips, {total_duration:.1f}s total - Ready to assemble'
-        assembly_ready = has_usable_clips
+        assembly_ready = stats.get('is_complete', False) and analyzed_count > 0
 
     duration_summary = {
         'current': total_duration,
@@ -3036,143 +3307,10 @@ def get_assembly_data(use_case_id):
     })
 
 
-def _run_assembly(ctx, app, use_case_id, script_id, options, upload_folder):
-    """Assembly worker — runs inside a background thread.
-
-    ``ctx`` is a :class:`app.tasks.thread_runner.TaskContext` used to
-    report progress back to the polling endpoint.
-    """
-    from app.services.smart_assembly import SmartVideoAssembler
-    from app.services.voiceover import VoiceoverGenerator
-    from app.utils.clip_assets import download_clip_assets
-    from app.services.pollo_ai import PolloAIClient
-
-    with app.app_context():
-        ffmpeg_path = app.config.get('FFMPEG_PATH', 'ffmpeg')
-        upload_folder = os.path.abspath(upload_folder)
-
-        ctx.update_state('STARTED', progress=5,
-                         message='Starting video assembly...', step='initializing')
-
-        use_case = db.session.get(UseCase, use_case_id)
-        script = db.session.get(Script, script_id)
-        if not use_case or not script:
-            raise ValueError("Use case or script not found")
-
-        # ── Download missing clips ────────────────────────────────
-        ctx.update_state('STARTED', progress=8,
-                         message='Downloading video clips...', step='downloading_clips')
-
-        assembly_clips = VideoClip.query.filter(
-            VideoClip.use_case_id == use_case_id,
-            VideoClip.status.in_(['ready', 'complete'])
-        ).all()
-
-        downloaded_count = 0
-        pollo_client = None
-        for clip in assembly_clips:
-            video_url = clip.pollo_video_url
-            if not video_url and clip.pollo_job_id:
-                try:
-                    if pollo_client is None:
-                        from app.brand_context import get_brand_api_key
-                        pollo_key = get_brand_api_key('pollo') or app.config.get('POLLO_API_KEY')
-                        pollo_client = PolloAIClient(api_key=pollo_key)
-                    status_result = pollo_client.check_job_status(clip.pollo_job_id, clip=clip)
-                    if status_result.get('success'):
-                        video_url = pollo_client._extract_video_url(status_result.get('result'))
-                        if video_url:
-                            clip.pollo_video_url = video_url
-                except Exception:
-                    pass
-
-            if not video_url:
-                continue
-
-            needs_download = False
-            if not clip.file_path:
-                needs_download = True
-            else:
-                resolved = os.path.join(upload_folder, clip.file_path)
-                if not os.path.exists(resolved):
-                    needs_download = True
-
-            if needs_download:
-                try:
-                    assets = download_clip_assets(
-                        clip=clip, video_url=video_url,
-                        upload_root=upload_folder, logger=app.logger)
-                    clip.file_path = assets['video']
-                    clip.thumbnail_path = assets['thumbnail']
-                    clip.status = 'complete'
-                    downloaded_count += 1
-                except Exception as e:
-                    clip.status = 'error'
-                    clip.error_message = f"Download failed: {e}"
-
-        if downloaded_count > 0:
-            db.session.commit()
-
-        # ── Voiceover ─────────────────────────────────────────────
-        ctx.update_state('PROGRESS', progress=15,
-                         message='Preparing voiceover...', step='voiceover')
-
-        voiceover_path = options.get('voiceover_path')
-        include_voiceover = options.get('include_voiceover', True)
-        if include_voiceover and not voiceover_path:
-            # Use brand-specific API key if available
-            from app.brand_context import get_brand_api_key
-            elevenlabs_key = get_brand_api_key('elevenlabs') or app.config.get('ELEVENLABS_API_KEY')
-            generator = VoiceoverGenerator(
-                api_key=elevenlabs_key,
-                upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
-            voiceover_result = generator.generate_voiceover(
-                use_case=use_case, script=script,
-                force=options.get('force_voiceover', False),
-                background_music=options.get('background_music'))
-            if not voiceover_result.get('success'):
-                raise RuntimeError(voiceover_result.get('error', 'Voiceover generation failed'))
-            voiceover_path = voiceover_result['file_path']
-
-        # ── Assemble ──────────────────────────────────────────────
-        ctx.update_state('PROGRESS', progress=30,
-                         message='Merging video clips...', step='assembly')
-
-        assembler = SmartVideoAssembler(upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
-        assembly_result = assembler.assemble_use_case_smart(
-            use_case=use_case, script=script,
-            audio_relative_path=voiceover_path,
-            transition=options.get('transition', 'cut'),
-            quality=options.get('quality', 'medium'),
-            format_override=options.get('format_override'),
-            transition_duration=float(options.get('transition_duration', 0.5)),
-            subtitle_style=options.get('subtitle_style'))
-
-        if not assembly_result.get('success'):
-            raise RuntimeError(assembly_result.get('error', 'Assembly failed'))
-
-        final_video_data = assembly_result.get('final_video') or {}
-        if not final_video_data:
-            raise RuntimeError('Assembly completed without final video data')
-
-        ctx.update_state('PROGRESS', progress=95,
-                         message='Finalizing video...', step='finalizing')
-
-        return {
-            'success': True,
-            'video_path': final_video_data.get('file_path'),
-            'duration': final_video_data.get('duration'),
-            'file_size': final_video_data.get('file_size'),
-            'final_video_id': final_video_data.get('id'),
-        }
-
-
 @main_bp.route('/api/use-cases/<int:use_case_id>/assemble', methods=['POST'])
 @login_required
 def assemble_final_video(use_case_id):
-    """Trigger final video assembly (Phase 8) — runs in a background thread."""
-    from app.tasks import thread_runner
-
+    """Trigger final video assembly (Phase 8) - Async with fallback."""
     use_case = UseCase.query.get_or_404(use_case_id)
     script = Script.query.filter_by(use_case_id=use_case_id).first()
 
@@ -3181,87 +3319,196 @@ def assemble_final_video(use_case_id):
     if script.status != 'approved':
         return jsonify({'error': 'Script must be approved before final assembly'}), 400
 
-    usable_clips = VideoClip.query.filter(
-        VideoClip.use_case_id == use_case_id,
-        VideoClip.status.in_(['complete', 'ready'])
+    completed_clips = VideoClip.query.filter_by(
+        use_case_id=use_case_id,
+        status='complete'
     ).count()
-    if usable_clips == 0:
-        return jsonify({'error': 'No clips available for assembly — generate clips first'}), 400
+    if completed_clips == 0:
+        return jsonify({'error': 'Complete clips are required before assembly'}), 400
 
     data = request.get_json() or {}
+    transition = data.get('transition', 'cut')
+    quality = data.get('quality', 'medium')
+    background_music = data.get('background_music')
+    force_voiceover = data.get('force_voiceover', False)
+    include_voiceover = data.get('include_voiceover', True)
+    transition_duration = float(data.get('transition_duration', 0.5))
+    format_override = data.get('format')
+
     upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
+    ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
 
-    options = {
-        'transition': data.get('transition', 'cut'),
-        'quality': data.get('quality', 'medium'),
-        'background_music': data.get('background_music'),
-        'force_voiceover': data.get('force_voiceover', False),
-        'include_voiceover': data.get('include_voiceover', True),
-        'transition_duration': float(data.get('transition_duration', 0.5)),
-        'format_override': data.get('format'),
-        'voiceover_path': data.get('voiceover_path'),
-        'subtitle_style': data.get('subtitle_style'),  # None = no subtitles
-    }
+    # Check if Celery is available for async processing
+    from app import celery as celery_app
+    celery_available = bool(celery_app and current_app.config.get('CELERY_AVAILABLE', False))
+    celery_disabled_reason = current_app.config.get('CELERY_DISABLED_REASON')
+    running_in_render = bool(os.getenv('RENDER'))
 
-    # Submit to background thread
-    task_id = thread_runner.submit(
-        _run_assembly,
-        current_app._get_current_object(),  # real app, not proxy
-        use_case_id, script.id, options, upload_folder,
+    if not celery_available and running_in_render:
+        current_app.logger.error(
+            'Async assembly is unavailable on Render: %s',
+            celery_disabled_reason or 'missing REDIS_URL/CELERY_BROKER_URL'
+        )
+        return jsonify({
+            'success': False,
+            'error': 'Background assembly service is not configured',
+            'details': celery_disabled_reason or 'Set REDIS_URL/CELERY_BROKER_URL to your Redis service connection string.',
+            'needs_configuration': True,
+            'hint': 'Link the Render web service to the Redis instance so Celery can queue long-running ffmpeg jobs.'
+        }), 503
+
+    if celery_available:
+        # Async processing via Celery
+        try:
+            from app.tasks.video_tasks import assemble_final_video_async
+
+            options = {
+                'transition': transition,
+                'quality': quality,
+                'background_music': background_music,
+                'force_voiceover': force_voiceover,
+                'include_voiceover': include_voiceover,
+                'transition_duration': transition_duration,
+                'format_override': format_override,
+                'voiceover_path': data.get('voiceover_path')
+            }
+
+            # Trigger async task
+            task = assemble_final_video_async.delay(
+                use_case_id=use_case_id,
+                script_id=script.id,
+                options=options,
+                upload_root=upload_folder
+            )
+
+            current_app.logger.info(
+                f'Async assembly triggered: task_id={task.id}, use_case={use_case_id}'
+            )
+
+            return jsonify({
+                'success': True,
+                'async': True,
+                'task_id': task.id,
+                'status': 'PENDING',
+                'message': 'Video assembly started in background. Poll for status.',
+                'poll_url': f'/api/use-cases/{use_case_id}/assembly-status/{task.id}'
+            })
+
+        except Exception as e:
+            current_app.logger.error(f'Failed to trigger async assembly: {e}')
+            # Fall back to sync if Celery fails
+            current_app.logger.info('Falling back to synchronous assembly')
+
+    # Synchronous processing (fallback)
+    voiceover_path = data.get('voiceover_path')
+    if include_voiceover:
+        try:
+            generator = VoiceoverGenerator(
+                api_key=current_app.config.get('ELEVENLABS_API_KEY'),
+                upload_folder=upload_folder,
+                ffmpeg_path=ffmpeg_path
+            )
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 500
+
+        if not voiceover_path:
+            voiceover_result = generator.generate_voiceover(
+                use_case=use_case,
+                script=script,
+                force=force_voiceover,
+                background_music=background_music
+            )
+            if not voiceover_result.get('success'):
+                status_code = 500 if 'error' in voiceover_result else 400
+                return jsonify(voiceover_result), status_code
+            voiceover_path = voiceover_result['file_path']
+
+    # Use Smart Assembler for intelligent clip selection and trimming
+    assembler = SmartVideoAssembler(upload_folder=upload_folder, ffmpeg_path=ffmpeg_path)
+    assembly_result = assembler.assemble_use_case_smart(
+        use_case=use_case,
+        script=script,
+        audio_relative_path=voiceover_path,
+        transition=transition,
+        quality=quality,
+        format_override=format_override,
+        transition_duration=transition_duration
     )
 
-    current_app.logger.info('Assembly started in thread: task_id=%s, use_case=%s',
-                            task_id, use_case_id)
+    if not assembly_result.get('success'):
+        return jsonify(assembly_result), 500
 
-    return jsonify({
-        'success': True,
-        'async': True,
-        'task_id': task_id,
-        'status': 'PENDING',
-        'message': 'Video assembly started in background. Poll for status.',
-        'poll_url': f'/api/use-cases/{use_case_id}/assembly-status/{task_id}'
-    })
+    return jsonify(assembly_result)
 
 
 @main_bp.route('/api/use-cases/<int:use_case_id>/assembly-status/<task_id>', methods=['GET'])
 @login_required
 def get_assembly_status(use_case_id, task_id):
-    """Check the status of an async assembly job (thread-based)."""
-    from app.tasks import thread_runner
+    """Check the status of an async assembly job."""
+    from app import celery as celery_app
+    celery_available = bool(celery_app and current_app.config.get('CELERY_AVAILABLE', False))
 
-    state = thread_runner.get_task(task_id)
-    if state is None:
+    if not celery_available:
         return jsonify({
-            'task_id': task_id,
-            'status': 'UNKNOWN',
             'success': False,
-            'message': 'Task not found — it may have expired.',
-        }), 404
+            'error': 'Async processing not available',
+            'details': current_app.config.get('CELERY_DISABLED_REASON')
+        }), 503
 
-    response = {
-        'task_id': task_id,
-        'status': state.get('status', 'PENDING'),
-        'success': state.get('success'),
-        'message': state.get('message', ''),
-        'progress': state.get('progress', 0),
-    }
+    try:
+        result = celery_app.AsyncResult(task_id)
 
-    if state.get('step'):
-        response['step'] = state['step']
+        response = {
+            'task_id': task_id,
+            'status': result.status,
+            'success': result.successful() if result.ready() else None
+        }
 
-    if state.get('status') == 'SUCCESS':
-        result_data = state.get('result') or {}
-        response['video_path'] = result_data.get('video_path')
-        response['duration'] = result_data.get('duration')
-        response['file_size'] = result_data.get('file_size')
-        response['final_video_id'] = result_data.get('final_video_id')
-        response['message'] = 'Assembly complete!'
+        if result.status == 'PENDING':
+            response['message'] = 'Assembly is queued and waiting to start...'
+            response['progress'] = 0
 
-    elif state.get('status') == 'FAILURE':
-        response['error'] = state.get('error', 'Unknown error')
-        response['message'] = f"Assembly failed: {state.get('error', 'Unknown error')}"
+        elif result.status == 'STARTED':
+            info = result.info or {}
+            response['message'] = info.get('message', 'Assembly in progress...')
+            response['progress'] = info.get('progress', 10)
+            response['step'] = info.get('step', 'initializing')
 
-    return jsonify(response)
+        elif result.status == 'PROGRESS':
+            info = result.info or {}
+            response['message'] = info.get('message', 'Processing...')
+            response['progress'] = info.get('progress', 50)
+            response['step'] = info.get('step', 'processing')
+
+        elif result.status == 'RETRY':
+            info = result.info or {}
+            response['message'] = info.get('message', 'Connection issue, retrying...')
+            response['progress'] = info.get('progress', 5)
+            response['step'] = info.get('step', 'retry')
+
+        elif result.ready():
+            if result.successful():
+                result_data = result.get()
+                response['success'] = True
+                response['message'] = 'Assembly complete!'
+                response['progress'] = 100
+                response['video_path'] = result_data.get('video_path')
+                response['duration'] = result_data.get('duration')
+                response['file_size'] = result_data.get('file_size')
+                response['final_video_id'] = result_data.get('final_video_id')
+            else:
+                response['success'] = False
+                response['message'] = 'Assembly failed'
+                response['error'] = str(result.result) if result.result else 'Unknown error'
+
+        return jsonify(response)
+
+    except Exception as e:
+        current_app.logger.error(f'Error checking assembly status: {e}')
+        return jsonify({
+            'success': False,
+            'error': f'Failed to check status: {str(e)}'
+        }), 500
 
 
 @main_bp.route('/api/use-cases/<int:use_case_id>/final-video', methods=['GET'])
@@ -3443,8 +3690,7 @@ def retry_failed_clips(use_case_id):
     use_case = UseCase.query.get_or_404(use_case_id)
 
     try:
-        from app.brand_context import get_brand_api_key
-        api_key = get_brand_api_key('pollo') or current_app.config.get('POLLO_API_KEY')
+        api_key = current_app.config.get('POLLO_API_KEY')
         upload_folder = current_app.config.get('UPLOAD_FOLDER', './uploads')
         manager = VideoClipManager(api_key=api_key, upload_folder=upload_folder)
 
@@ -3529,10 +3775,8 @@ def get_library_clips():
         page = int(request.args.get('page', 1))
         per_page = int(request.args.get('per_page', 24))
 
-        # Build query (scoped by brand)
+        # Build query
         query = ClipLibrary.query.filter_by(status='active')
-        if g.get('current_brand'):
-            query = query.filter_by(brand_id=g.current_brand.id)
 
         if content_type:
             query = query.filter_by(content_type=content_type)
@@ -3625,9 +3869,7 @@ def add_to_library():
                     'library_clip_id': existing.id
                 }), 409
 
-            brand_id = g.current_brand.id if g.get('current_brand') else None
             library_clip = ClipLibrary(
-                brand_id=brand_id,
                 original_clip_id=clip.id,
                 original_product_id=product.id if product else None,
                 original_use_case_id=use_case.id if use_case else None,
@@ -3645,9 +3887,7 @@ def add_to_library():
             )
         else:
             # Manual entry (for uploaded videos)
-            brand_id = g.current_brand.id if g.get('current_brand') else None
             library_clip = ClipLibrary(
-                brand_id=brand_id,
                 file_path=data.get('file_path'),
                 thumbnail_path=data.get('thumbnail_path'),
                 name=data.get('name'),
@@ -3834,30 +4074,20 @@ def remove_library_clip_from_use_case(use_case_id, link_id):
 def get_library_stats():
     """Get statistics about the clip library."""
     try:
-        base_q = ClipLibrary.query.filter_by(status='active')
-        if g.get('current_brand'):
-            base_q = base_q.filter_by(brand_id=g.current_brand.id)
-
-        total_clips = base_q.count()
-        favorites = base_q.filter_by(is_favorite=True).count()
+        total_clips = ClipLibrary.query.filter_by(status='active').count()
+        favorites = ClipLibrary.query.filter_by(status='active', is_favorite=True).count()
 
         # Count by content type
-        ct_q = db.session.query(
+        content_types = db.session.query(
             ClipLibrary.content_type,
             db.func.count(ClipLibrary.id)
-        ).filter(ClipLibrary.status == 'active')
-        if g.get('current_brand'):
-            ct_q = ct_q.filter(ClipLibrary.brand_id == g.current_brand.id)
-        content_types = ct_q.group_by(ClipLibrary.content_type).all()
+        ).filter_by(status='active').group_by(ClipLibrary.content_type).all()
 
         # Count by style
-        style_q = db.session.query(
+        styles = db.session.query(
             ClipLibrary.style,
             db.func.count(ClipLibrary.id)
-        ).filter(ClipLibrary.status == 'active')
-        if g.get('current_brand'):
-            style_q = style_q.filter(ClipLibrary.brand_id == g.current_brand.id)
-        styles = style_q.group_by(ClipLibrary.style).all()
+        ).filter_by(status='active').group_by(ClipLibrary.style).all()
 
         return jsonify({
             'success': True,

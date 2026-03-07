@@ -8,7 +8,37 @@ from typing import Any, Dict, List, Optional, Tuple
 from flask import current_app
 
 from app import db
-from app.models import FinalVideo, Product, Script, UseCase, VideoClip
+from app.models import FinalVideo, Product, Script, UseCase, VideoClip, Hook
+
+
+def build_hook_script_payload(hook: Optional[Hook]) -> Optional[Dict[str, Any]]:
+    """Return a normalized payload for feeding hook data into script generation."""
+
+    if not hook or hook.winning_variant_index is None:
+        return None
+
+    variants = hook.variants or []
+    if not isinstance(variants, list):
+        return None
+
+    try:
+        variant = variants[hook.winning_variant_index]
+    except (IndexError, TypeError):
+        return None
+
+    if not isinstance(variant, dict):
+        return None
+
+    return {
+        "id": hook.id,
+        "hook_type": hook.hook_type,
+        "status": hook.status,
+        "variant_index": hook.winning_variant_index,
+        "variant": variant,
+        "image_paths": hook.image_paths or [],
+        "audio_path": hook.audio_path,
+        "video_path": hook.video_path,
+    }
 from app.scrapers import scrape_product  # noqa: F401 (used for recovery diagnostics)
 from app.services.script_gen import ScriptGenerator
 from app.services.video_clip_manager import VideoClipManager
@@ -23,6 +53,8 @@ class PipelineProgressTracker:
 
     STAGES = OrderedDict(
         [
+            ("use_case", "Use Case"),
+            ("hook", "Hook"),
             ("script", "Script"),
             ("clips", "Clip Generation"),
             ("analysis", "Clip Analysis"),
@@ -79,6 +111,54 @@ class PipelineProgressTracker:
 
         state = cls.ensure_state(use_case)
         changed = False
+
+        # Use case / spec stage
+        use_case_status = (use_case.status or '').lower()
+        spec_ready = bool(use_case.voice_id and use_case.target_audience)
+        status_label = use_case.status or 'in-progress'
+        if spec_ready and use_case_status not in ('draft', ''):
+            use_case_payload = cls._default_payload('complete', 'Use case configured', meta={'status': status_label})
+        elif use_case_status not in ('draft', '', None):
+            use_case_payload = cls._default_payload('running', f'Status: {status_label}', meta={'status': status_label})
+        else:
+            use_case_payload = cls._default_payload('pending', 'Select voice & duration', meta={'status': status_label})
+        if state.get('use_case') != use_case_payload:
+            state['use_case'] = use_case_payload
+            changed = True
+
+        hook = getattr(use_case, 'hook', None)
+        hook_payload = cls._default_payload('pending', 'Hook not started', meta={})
+        if hook:
+            hook_status = (hook.status or '').lower()
+            message = None
+            status_value = 'pending'
+            if hook_status == 'failed':
+                status_value = 'error'
+                message = hook.error_message or 'Hook previews failed'
+            elif not (hook.image_paths or []):
+                status_value = 'running'
+                message = 'Generating preview assets'
+            elif hook.winning_variant_index is None:
+                status_value = 'pending'
+                message = 'Select winning variant'
+            else:
+                if hook_status == 'animating':
+                    status_value = 'running'
+                    message = 'Hook animation in progress'
+                elif hook_status in ('complete', 'preview_ready', 'ready_for_animation'):
+                    status_value = 'complete'
+                    message = 'Hook animated' if hook_status == 'complete' else 'Hook selected'
+                else:
+                    status_value = hook_status or 'running'
+                    message = 'Hook selected'
+            hook_payload = cls._default_payload(status_value, message, meta={
+                'hook_id': hook.id,
+                'hook_status': hook.status,
+                'winning_variant_index': hook.winning_variant_index,
+            })
+        if state.get('hook') != hook_payload:
+            state['hook'] = hook_payload
+            changed = True
 
         script = Script.query.filter_by(use_case_id=use_case.id).first()
         script_status = "pending"
@@ -288,8 +368,14 @@ class PipelineRecoveryService:
             "target_audience": use_case.target_audience,
             "duration_target": use_case.duration_target,
         }
+        hook_payload = build_hook_script_payload(getattr(use_case, "hook", None))
         PipelineProgressTracker.update_stage(use_case, "script", "running", message="Regenerating script")
-        result = generator.generate_script(product_data, use_case_config, existing_script=script.content if script else None)
+        result = generator.generate_script(
+            product_data,
+            use_case_config,
+            existing_script=script.content if script else None,
+            hook=hook_payload,
+        )
         if not result.get("success"):
             PipelineProgressTracker.update_stage(
                 use_case,

@@ -1,245 +1,41 @@
-import re
-import secrets
-from datetime import datetime, timedelta
+from datetime import datetime
 from app import db
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 
 
-class Brand(db.Model):
-    """Tenant model — each brand is an isolated workspace."""
-
-    __tablename__ = 'brands'
-
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(150), nullable=False)
-    slug = db.Column(db.String(150), unique=True, nullable=False)
-
-    # Per-brand API key overrides (optional — falls back to global env)
-    pollo_api_key = db.Column(db.String(500))
-    elevenlabs_api_key = db.Column(db.String(500))
-    openai_api_key = db.Column(db.String(500))
-
-    # Brand-level settings (JSON blob for extensibility)
-    settings = db.Column(db.JSON, default=dict)
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # Relationships
-    memberships = db.relationship('BrandMembership', backref='brand', lazy=True, cascade='all, delete-orphan')
-    products = db.relationship('Product', backref='brand_ref', lazy=True)
-    usage_records = db.relationship('UsageRecord', backref='brand', lazy=True)
-
-    @staticmethod
-    def slugify(name):
-        """Generate a URL-friendly slug from a brand name."""
-        slug = name.lower().strip()
-        slug = re.sub(r'[^\w\s-]', '', slug)
-        slug = re.sub(r'[\s_]+', '-', slug)
-        slug = re.sub(r'-+', '-', slug).strip('-')
-        return slug
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'name': self.name,
-            'slug': self.slug,
-            'has_pollo_key': bool(self.pollo_api_key),
-            'has_elevenlabs_key': bool(self.elevenlabs_api_key),
-            'has_openai_key': bool(self.openai_api_key),
-            'settings': self.settings or {},
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-    def __repr__(self):
-        return f'<Brand {self.name}>'
-
-
-class BrandMembership(db.Model):
-    """Association between users and brands with role-based access."""
-
-    __tablename__ = 'brand_memberships'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=False)
-    role = db.Column(db.String(50), default='member')  # owner, admin, member, viewer
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    __table_args__ = (db.UniqueConstraint('user_id', 'brand_id', name='uq_user_brand'),)
-
-    ROLE_HIERARCHY = {'viewer': 0, 'member': 1, 'admin': 2, 'owner': 3}
-
-    def has_min_role(self, required_role):
-        """Check if this membership meets the minimum role requirement."""
-        return self.ROLE_HIERARCHY.get(self.role, 0) >= self.ROLE_HIERARCHY.get(required_role, 0)
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_id': self.user_id,
-            'brand_id': self.brand_id,
-            'role': self.role,
-            'username': self.user.username if self.user else None,
-            'brand_name': self.brand.name if self.brand else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-        }
-
-    def __repr__(self):
-        return f'<BrandMembership user={self.user_id} brand={self.brand_id} role={self.role}>'
-
-
-class BrandInvitation(db.Model):
-    """Pending invitation to join a brand workspace."""
-
-    __tablename__ = 'brand_invitations'
-
-    id = db.Column(db.Integer, primary_key=True)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=False)
-    email = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(50), default='member')  # viewer, member, admin
-    token = db.Column(db.String(128), unique=True, nullable=False)
-
-    invited_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-
-    status = db.Column(db.String(50), default='pending')  # pending, accepted, expired, revoked
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    expires_at = db.Column(db.DateTime)
-    accepted_at = db.Column(db.DateTime)
-
-    # Relationships
-    brand = db.relationship('Brand', backref='invitations')
-    invited_by = db.relationship('User', backref='sent_invitations')
-
-    EXPIRY_DAYS = 7
-
-    @staticmethod
-    def generate_token():
-        return secrets.token_urlsafe(48)
-
-    @property
-    def is_expired(self):
-        if self.expires_at:
-            return datetime.utcnow() > self.expires_at
-        return False
-
-    @property
-    def is_valid(self):
-        return self.status == 'pending' and not self.is_expired
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'brand_id': self.brand_id,
-            'email': self.email,
-            'role': self.role,
-            'status': self.status,
-            'invited_by': self.invited_by.username if self.invited_by else None,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'expires_at': self.expires_at.isoformat() if self.expires_at else None,
-            'accepted_at': self.accepted_at.isoformat() if self.accepted_at else None,
-        }
-
-
-class UsageRecord(db.Model):
-    """Tracks API usage and costs per brand for billing and monitoring."""
-
-    __tablename__ = 'usage_records'
-
-    id = db.Column(db.Integer, primary_key=True)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-
-    service = db.Column(db.String(50), nullable=False)       # 'pollo', 'elevenlabs', 'openai'
-    operation = db.Column(db.String(100), nullable=False)     # 'video_generation', 'voiceover', 'script_gen'
-    entity_type = db.Column(db.String(50))                    # 'video_clip', 'final_video', 'script'
-    entity_id = db.Column(db.Integer)
-
-    units_consumed = db.Column(db.Float, default=0)           # API-specific units
-    estimated_cost_usd = db.Column(db.Float, default=0)
-
-    meta_data = db.Column(db.JSON, default=dict)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    # Relationships
-    user = db.relationship('User', backref='usage_records')
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'brand_id': self.brand_id,
-            'user_id': self.user_id,
-            'service': self.service,
-            'operation': self.operation,
-            'entity_type': self.entity_type,
-            'entity_id': self.entity_id,
-            'units_consumed': self.units_consumed,
-            'estimated_cost_usd': self.estimated_cost_usd,
-            'meta_data': self.meta_data or {},
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-        }
-
-    def __repr__(self):
-        return f'<UsageRecord brand={self.brand_id} service={self.service}>'
-
-
 class User(UserMixin, db.Model):
     """User model for authentication."""
-
+    
     __tablename__ = 'users'
-
+    
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    email = db.Column(db.String(255), unique=True, nullable=True)
     password_hash = db.Column(db.String(256), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
-    active_brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_login = db.Column(db.DateTime)
-
-    # Relationships
-    brand_memberships = db.relationship('BrandMembership', backref='user', lazy=True)
-    active_brand = db.relationship('Brand', foreign_keys=[active_brand_id])
-
+    
     def set_password(self, password):
         """Hash and set the user password."""
         self.password_hash = generate_password_hash(password)
-
+    
     def check_password(self, password):
         """Check if provided password matches the hash."""
         return check_password_hash(self.password_hash, password)
-
-    def get_brands(self):
-        """Return all brands this user is a member of."""
-        return [m.brand for m in self.brand_memberships]
-
-    def get_membership(self, brand_id):
-        """Return the membership for a specific brand, or None."""
-        return BrandMembership.query.filter_by(user_id=self.id, brand_id=brand_id).first()
-
-    def has_brand_access(self, brand_id, min_role='viewer'):
-        """Check if user has at least min_role on the given brand."""
-        if self.is_admin:
-            return True
-        membership = self.get_membership(brand_id)
-        return membership is not None and membership.has_min_role(min_role)
-
+    
     def __repr__(self):
         return f'<User {self.username}>'
 
 
 class Product(db.Model):
     """Product model for storing scraped product data."""
-
+    
     __tablename__ = 'products'
-
+    
     id = db.Column(db.Integer, primary_key=True)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=True)
     name = db.Column(db.String(255), nullable=False)
-    url = db.Column(db.String(500), nullable=False)
+    url = db.Column(db.String(500), nullable=False, unique=True)
     description = db.Column(db.Text)
     brand = db.Column(db.String(100))
     price = db.Column(db.String(50))
@@ -252,17 +48,16 @@ class Product(db.Model):
     pipeline_state = db.Column(db.JSON, default=dict)  # Tracks pipeline progress for recovery
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
+    
     # Relationships
     use_cases = db.relationship('UseCase', backref='product', lazy=True, cascade='all, delete-orphan')
-
+    
     def __repr__(self):
         return f'<Product {self.name}>'
-
+    
     def to_dict(self):
         return {
             'id': self.id,
-            'brand_id': self.brand_id,
             'name': self.name,
             'url': self.url,
             'description': self.description,
@@ -277,158 +72,278 @@ class Product(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
-
+    
     def get_current_stage_info(self):
-        """Get the current pipeline stage information for this product.
+        """Return an overview of the product's pipeline status.
 
-        Returns a dict with:
-        - current_stage: the current stage name (scrape, usecase, script, video_gen, assembly, output)
-        - stage_label: human-readable label
-        - progress_pct: approximate completion percentage
-        - next_url: URL to continue work
-        - use_case_id: current use case ID (if any)
-        - use_case_name: current use case name (if any)
-        - is_complete: whether the project is fully complete
+        The response powers the dashboard \"Continue\" card and pipeline UI.
+        It includes stage metadata, progress percentage, clip stats, and
+        navigation targets for each step.
         """
-        from app import db
 
-        # Check for use cases
+        # Fetch latest use case + related artifacts (if any)
         use_cases = UseCase.query.filter_by(product_id=self.id).order_by(UseCase.created_at.desc()).all()
+        use_case = use_cases[0] if use_cases else None
+        use_case_id = use_case.id if use_case else None
+        use_case_name = use_case.name if use_case else None
 
-        if not use_cases:
-            return {
-                'current_stage': 'usecase',
-                'stage_label': 'Scraped - Needs Use Case',
-                'progress_pct': 14.3,
-                'next_url': f"/use-case/{self.id}",
-                'use_case_id': None,
-                'use_case_name': None,
-                'is_complete': False
+        script = None
+        clips = []
+        complete_clips = []
+        error_clips = []
+        pending_clips = []
+        target_clips = 0
+        final_video = None
+        hook = Hook.query.filter_by(use_case_id=use_case_id).first() if use_case_id else None
+
+        if use_case_id:
+            script = Script.query.filter_by(use_case_id=use_case_id).order_by(Script.created_at.desc()).first()
+            clips = VideoClip.query.filter_by(use_case_id=use_case_id).all()
+            complete_clips = [c for c in clips if c.status == 'complete']
+            error_clips = [c for c in clips if c.status == 'error']
+            pending_clips = [c for c in clips if c.status in ('pending', 'generating')]
+            target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
+            final_video = FinalVideo.query.filter_by(use_case_id=use_case_id).order_by(FinalVideo.created_at.desc()).first()
+
+        clip_stats = {
+            'complete': len(complete_clips),
+            'errors': len(error_clips),
+            'pending': len(pending_clips),
+            'target': target_clips
+        }
+
+        stage_order = ['scrape', 'spec', 'hook', 'script', 'video', 'assembly', 'output']
+        use_case_url = f"/use-case/{self.id}"
+        hook_url = f"/hook/{use_case_id}" if use_case_id else use_case_url
+        script_url = f"/script/{use_case_id}" if use_case_id else use_case_url
+        video_url = f"/video-gen/{use_case_id}" if use_case_id else use_case_url
+        assembly_url = f"/assembly/{use_case_id}" if use_case_id else use_case_url
+        output_url = f"/output/{use_case_id}" if use_case_id else use_case_url
+
+        stage_templates = {
+            'scrape': {
+                'label': 'Scrape',
+                'description': 'Import product data',
+                'url': '/scrape'
+            },
+            'spec': {
+                'label': 'Spec',
+                'description': 'Configure use case & voice',
+                'url': use_case_url
+            },
+            'hook': {
+                'label': 'Hook',
+                'description': 'Choose and preview your hook',
+                'url': hook_url
+            },
+            'script': {
+                'label': 'Script',
+                'description': 'Generate and approve script',
+                'url': script_url
+            },
+            'video': {
+                'label': 'Video',
+                'description': 'Generate required clips',
+                'url': video_url
+            },
+            'assembly': {
+                'label': 'Assembly',
+                'description': 'Assemble clips with voiceover',
+                'url': assembly_url
+            },
+            'output': {
+                'label': 'Output',
+                'description': 'Download & share final video',
+                'url': output_url
             }
+        }
 
-        # Get most recent use case
-        use_case = use_cases[0]
+        stage_progress = {
+            'scrape': 12.5,
+            'spec': 25.0,
+            'hook': 40.0,
+            'script': 55.0,
+            'video': 75.0,
+            'assembly': 90.0,
+            'output': 100.0
+        }
 
-        # Check script status
-        script = Script.query.filter_by(use_case_id=use_case.id).first()
-
-        if not script:
-            return {
-                'current_stage': 'script',
-                'stage_label': 'Needs Script',
-                'progress_pct': 28.6,
-                'next_url': f"/script/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
+        stage_status_map = {
+            key: {
+                'status': 'pending',
+                'summary': tmpl['description'],
+                'enabled': key == 'scrape'
             }
+            for key, tmpl in stage_templates.items()
+        }
 
-        if script.status != 'approved':
-            return {
-                'current_stage': 'script',
-                'stage_label': 'Script Pending Approval',
-                'progress_pct': 42.9,
-                'next_url': f"/script/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-
-        # Check video clips
-        clips = VideoClip.query.filter_by(use_case_id=use_case.id).all()
-        complete_clips = [c for c in clips if c.status == 'complete']
-        error_clips = [c for c in clips if c.status == 'error']
-        pending_clips = [c for c in clips if c.status in ('pending', 'generating')]
-
-        target_clips = use_case.num_clips or use_case.calculated_num_clips or 4
-
-        # If not all clips are complete, we're in video_gen stage
-        if len(complete_clips) < target_clips:
-            if error_clips:
-                label = f'Video Gen - {len(error_clips)} Error(s)'
-            elif pending_clips:
-                label = f'Video Gen - {len(complete_clips)}/{target_clips} Complete'
+        def set_stage_state(key, status, summary, enabled=None):
+            entry = stage_status_map.get(key, {}).copy()
+            entry['status'] = status
+            entry['summary'] = summary
+            if enabled is None:
+                entry['enabled'] = status in ('current', 'complete')
             else:
-                label = 'Video Gen - Starting'
+                entry['enabled'] = bool(enabled)
+            stage_status_map[key] = entry
 
-            clip_progress = (len(complete_clips) / max(target_clips, 1)) * 14.3
-
+        def build_response(current_stage_key: str, stage_label: str, progress_value: float, is_complete: bool = False):
+            steps = []
+            for key in stage_order:
+                template = stage_templates[key]
+                status_meta = stage_status_map.get(key, {})
+                steps.append({
+                    'key': key,
+                    'label': template['label'],
+                    'description': template['description'],
+                    'summary': status_meta.get('summary', template['description']),
+                    'status': status_meta.get('status', 'pending'),
+                    'url': template['url'],
+                    'enabled': bool(status_meta.get('enabled', False) and template['url']),
+                    'progress_pct': stage_progress[key],
+                    'is_current': status_meta.get('status') == 'current',
+                    'is_complete': status_meta.get('status') == 'complete'
+                })
+            next_url = stage_templates.get(current_stage_key, {}).get('url') or '/scrape'
+            pending_step = next((step for step in steps if step['status'] == 'current'), None)
+            if pending_step and pending_step.get('url'):
+                next_url = pending_step['url']
             return {
-                'current_stage': 'video_gen',
-                'stage_label': label,
-                'progress_pct': 42.9 + clip_progress,
-                'next_url': f"/video-gen/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
+                'current_stage': current_stage_key,
+                'stage_label': stage_label,
+                'progress_pct': round(progress_value, 1),
+                'next_url': next_url,
+                'use_case_id': use_case_id,
+                'use_case_name': use_case_name,
+                'is_complete': is_complete,
+                'pipeline_steps': steps,
+                'clip_stats': clip_stats,
+                'final_video_status': final_video.status if final_video else None
             }
 
-        # All clips complete - check assembly status
-        final_video = FinalVideo.query.filter_by(use_case_id=use_case.id).order_by(FinalVideo.created_at.desc()).first()
+        progress_pct = 0.0
 
-        if not final_video:
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Ready for Assembly',
-                'progress_pct': 71.4,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
-
-        if final_video.status == 'complete':
-            return {
-                'current_stage': 'output',
-                'stage_label': 'Final Video Ready',
-                'progress_pct': 100.0,
-                'next_url': f"/output/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': True
-            }
-        elif final_video.status == 'error':
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Assembly Failed - Retry',
-                'progress_pct': 71.4,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
+        # Stage 1: Scrape
+        product_status = (self.status or '').lower()
+        scrape_complete = bool(self.scraped_data) or product_status not in ('', 'pending', 'error')
+        if scrape_complete:
+            set_stage_state('scrape', 'complete', 'Product scraped', enabled=True)
+            progress_pct = stage_progress['scrape']
         else:
-            return {
-                'current_stage': 'assembly',
-                'stage_label': 'Assembling Video...',
-                'progress_pct': 85.7,
-                'next_url': f"/assembly/{use_case.id}",
-                'use_case_id': use_case.id,
-                'use_case_name': use_case.name,
-                'is_complete': False
-            }
+            set_stage_state('scrape', 'current', 'Scrape a product URL to begin', enabled=True)
+            return build_response('scrape', 'Scrape a product to get started', 0.0)
+
+        # Stage 2: Spec / Use Case
+        if not use_case:
+            set_stage_state('spec', 'current', 'Set up your first use case', enabled=True)
+            return build_response('spec', 'Configure your use case details', progress_pct)
+        else:
+            set_stage_state('spec', 'complete', f'Use case: {use_case.name}', enabled=True)
+            progress_pct = max(progress_pct, stage_progress['spec'])
+
+        # Stage 3: Hook
+        if not hook:
+            set_stage_state('hook', 'current', 'Generate hook concepts', enabled=True)
+            return build_response('hook', 'Choose your hook style', progress_pct)
+
+        hook_status = (hook.status or '').lower()
+        if hook_status == 'failed':
+            summary = hook.error_message or 'Hook previews failed'
+            set_stage_state('hook', 'current', summary, enabled=True)
+            return build_response('hook', summary, progress_pct)
+
+        if not (hook.image_paths or []):
+            set_stage_state('hook', 'current', 'Generate preview assets', enabled=True)
+            return build_response('hook', 'Generate hook previews', progress_pct)
+
+        if hook.winning_variant_index is None:
+            set_stage_state('hook', 'current', 'Select your winning variant', enabled=True)
+            return build_response('hook', 'Select your favorite hook', stage_progress['hook'])
+
+        hook_summary = 'Hook animated' if hook_status == 'complete' else 'Hook selected'
+        if hook_status == 'animating':
+            hook_summary = 'Hook animation in progress'
+        set_stage_state('hook', 'complete', hook_summary, enabled=True)
+        progress_pct = max(progress_pct, stage_progress['hook'])
+
+        # Stage 4: Script
+        if not script:
+            set_stage_state('script', 'current', 'Generate your script', enabled=True)
+            return build_response('script', 'Generate a script for this use case', progress_pct)
+
+        script_status = (script.status or '').lower()
+        if script_status != 'approved':
+            set_stage_state('script', 'current', 'Review and approve the script', enabled=True)
+            mid_progress = stage_progress['hook'] + 5.0
+            return build_response('script', 'Script pending approval', mid_progress)
+
+        set_stage_state('script', 'complete', 'Script approved', enabled=True)
+        progress_pct = max(progress_pct, stage_progress['script'])
+
+        # Stage 5: Video (clip generation)
+        clip_ratio = 1.0 if target_clips <= 0 else len(complete_clips) / max(target_clips, 1)
+
+        if clip_ratio < 1.0:
+            if error_clips:
+                label = f"Video - {len(error_clips)} error(s)"
+            elif pending_clips:
+                label = f"Video - {len(complete_clips)}/{target_clips} clips ready"
+            else:
+                label = 'Video - Starting generation'
+
+            set_stage_state('video', 'current', label, enabled=True)
+
+            clip_progress = clip_ratio * (stage_progress['video'] - stage_progress['script'])
+            return build_response('video', label, stage_progress['script'] + clip_progress)
+
+        set_stage_state('video', 'complete', 'All required clips complete', enabled=True)
+        progress_pct = max(progress_pct, stage_progress['video'])
+
+        # Stage 6: Assembly
+        if not final_video:
+            set_stage_state('assembly', 'current', 'Ready for assembly', enabled=True)
+            return build_response('assembly', 'Ready for assembly', progress_pct)
+
+        final_status = (final_video.status or '').lower()
+        if final_status == 'error':
+            set_stage_state('assembly', 'current', 'Assembly failed - retry', enabled=True)
+            return build_response('assembly', 'Assembly failed - retry needed', progress_pct)
+        elif final_status in ('pending', 'assembling'):
+            set_stage_state('assembly', 'current', 'Assembling video...', enabled=True)
+            return build_response('assembly', 'Assembling video...', stage_progress['assembly'] - 5.0)
+
+        set_stage_state('assembly', 'complete', 'Assembly finished', enabled=True)
+        progress_pct = max(progress_pct, stage_progress['assembly'])
+
+        # Stage 7: Output
+        if final_status == 'complete':
+            set_stage_state('output', 'complete', 'Final video ready', enabled=True)
+            return build_response('output', 'Final video ready to download', stage_progress['output'], is_complete=True)
+
+        set_stage_state('output', 'current', 'Finalize output', enabled=True)
+        return build_response('output', 'Prepare final output', progress_pct)
+
 
 class UseCase(db.Model):
     """Use case configuration for video generation."""
-
+    
     __tablename__ = 'use_cases'
-
+    
     id = db.Column(db.Integer, primary_key=True)
     product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=True)
     name = db.Column(db.String(100), nullable=False)  # e.g., "Product Demo"
-
+    
     # Video configuration
     format = db.Column(db.String(20), default='9:16')  # 9:16, 16:9, 1:1, 4:5
     style = db.Column(db.String(50), default='realistic')  # realistic, animated, comic, cinematic
     goal = db.Column(db.String(200))  # Call to action text
     target_audience = db.Column(db.String(200))
     duration_target = db.Column(db.Integer, default=15)  # Target duration in seconds
-
+    
     # Voice configuration
     voice_id = db.Column(db.String(100))
     voice_settings = db.Column(db.JSON, default=dict)  # Stability, similarity, etc.
-
+    
     # Generation settings
     num_clips = db.Column(db.Integer, default=4)  # Number of video clips to generate
     generation_mode = db.Column(db.String(50), default='balanced')  # balanced, product_accuracy, creative_storytelling
@@ -437,15 +352,16 @@ class UseCase(db.Model):
     pipeline_state = db.Column(db.JSON, default=dict)  # Tracks per-stage progress for recovery
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
+    
     # Relationships
     scripts = db.relationship('Script', backref='use_case', lazy=True, cascade='all, delete-orphan')
     video_clips = db.relationship('VideoClip', backref='use_case', lazy=True, cascade='all, delete-orphan')
     final_videos = db.relationship('FinalVideo', backref='use_case', lazy=True, cascade='all, delete-orphan')
-
+    hook = db.relationship('Hook', back_populates='use_case', uselist=False, cascade='all, delete-orphan')
+    
     def __repr__(self):
         return f'<UseCase {self.name}>'
-
+    
     @staticmethod
     def calculate_num_clips(duration_seconds: int) -> int:
         """Return recommended clip count for a target duration."""
@@ -477,7 +393,6 @@ class UseCase(db.Model):
         return {
             'id': self.id,
             'product_id': self.product_id,
-            'brand_id': self.brand_id,
             'name': self.name,
             'format': self.format,
             'style': self.style,
@@ -495,28 +410,76 @@ class UseCase(db.Model):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
 
-class Script(db.Model):
-    """Voiceover script for video."""
+class Hook(db.Model):
+    """Stores hook configurations and generated assets for a use case."""
 
-    __tablename__ = 'scripts'
+    __tablename__ = 'hooks'
 
     id = db.Column(db.Integer, primary_key=True)
-    use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=False)
+    use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=False, unique=True)
 
-    content = db.Column(db.Text, nullable=False)
-    estimated_duration = db.Column(db.Integer)  # Estimated duration in seconds
-    tone = db.Column(db.String(50))  # enthusiastic, professional, casual, etc.
+    # User selection metadata
+    hook_type = db.Column(db.String(50), nullable=False)
+    winning_variant_index = db.Column(db.Integer, nullable=True)
 
-    # Status tracking
-    status = db.Column(db.String(50), default='draft')  # draft, generated, approved
-    generation_prompt = db.Column(db.Text)  # The prompt used to generate this script
+    # Generated content
+    variants = db.Column(db.JSON, default=list)  # [{verbal, on_screen, visual}, ...]
+    image_paths = db.Column(db.JSON, default=list)
+    audio_path = db.Column(db.String(500))
+    video_path = db.Column(db.String(500))
+
+    # Status handling
+    status = db.Column(db.String(20), default='draft')  # draft, preview_ready, animating, complete, failed
+    error_message = db.Column(db.Text)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Relationship back to use case
+    use_case = db.relationship('UseCase', back_populates='hook')
+
+    def __repr__(self):
+        return f'<Hook use_case={self.use_case_id} type={self.hook_type}>'
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'use_case_id': self.use_case_id,
+            'hook_type': self.hook_type,
+            'winning_variant_index': self.winning_variant_index,
+            'variants': self.variants or [],
+            'image_paths': self.image_paths or [],
+            'audio_path': self.audio_path,
+            'video_path': self.video_path,
+            'status': self.status,
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class Script(db.Model):
+    """Voiceover script for video."""
+    
+    __tablename__ = 'scripts'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=False)
+    
+    content = db.Column(db.Text, nullable=False)
+    estimated_duration = db.Column(db.Integer)  # Estimated duration in seconds
+    tone = db.Column(db.String(50))  # enthusiastic, professional, casual, etc.
+    
+    # Status tracking
+    status = db.Column(db.String(50), default='draft')  # draft, generated, approved
+    generation_prompt = db.Column(db.Text)  # The prompt used to generate this script
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
     def __repr__(self):
         return f'<Script {self.id}>'
-
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -531,53 +494,47 @@ class Script(db.Model):
 
 class VideoClip(db.Model):
     """Individual video clip generated by Pollo.ai."""
-
+    
     __tablename__ = 'video_clips'
-
+    
     id = db.Column(db.Integer, primary_key=True)
     use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=False)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=True)
-
+    
     # Clip metadata
     sequence_order = db.Column(db.Integer, default=0)  # Position in final video
     prompt = db.Column(db.Text)  # The prompt used to generate this clip
-    generation_strategy = db.Column(db.String(50), default='composite_then_kling')
-    asset_source = db.Column(db.String(50), default='product_image')  # product_image, composite_generated, generated_scene, text_only
-    script_segment_ref = db.Column(db.Text)
-    quality_score = db.Column(db.Float)
-
+    
     # File paths
     file_path = db.Column(db.String(500))
     thumbnail_path = db.Column(db.String(500))
-
+    
     # Pollo.ai specific
     pollo_job_id = db.Column(db.String(100))
     pollo_video_url = db.Column(db.String(1000))
     model_used = db.Column(db.String(50))  # e.g., "minimax-video-01"
-
+    
     # Clip analysis
     duration = db.Column(db.Float)  # Duration in seconds
     content_description = db.Column(db.Text)  # AI-generated description
     tags = db.Column(db.JSON, default=list)  # Tags for categorization
     analysis_metadata = db.Column(db.JSON, default=dict)  # Additional analysis data
-
+    
     # Status
     status = db.Column(db.String(50), default='pending')  # pending, generating, complete, error
     error_message = db.Column(db.Text)
-
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
-
+    
     READY_STATUSES = ('complete', 'ready')
-
+    
     def __repr__(self):
         return f'<VideoClip {self.id}>'
-
+    
     def to_dict(self):
         return {
             'id': self.id,
             'use_case_id': self.use_case_id,
-            'brand_id': self.brand_id,
             'sequence_order': self.sequence_order,
             'prompt': self.prompt,
             'generation_strategy': self.generation_strategy,
@@ -650,21 +607,20 @@ class VideoClip(db.Model):
 
 class ClipLibrary(db.Model):
     """Shared clip library for reusable video clips across products and use cases."""
-
+    
     __tablename__ = 'clip_library'
-
+    
     id = db.Column(db.Integer, primary_key=True)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=True)
-
+    
     # Source information (where this clip came from)
     original_clip_id = db.Column(db.Integer, db.ForeignKey('video_clips.id'), nullable=True)
     original_product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=True)
     original_use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=True)
-
+    
     # File paths (copied from original clip)
     file_path = db.Column(db.String(500), nullable=False)
     thumbnail_path = db.Column(db.String(500))
-
+    
     # Metadata for search/filter
     name = db.Column(db.String(200), nullable=False)
     description = db.Column(db.Text)
@@ -672,36 +628,35 @@ class ClipLibrary(db.Model):
     style = db.Column(db.String(50))  # realistic, cinematic, animated, comic
     format = db.Column(db.String(20))  # 9:16, 16:9, 1:1, 4:5
     duration = db.Column(db.Float)
-
+    
     # Tags for categorization
     tags = db.Column(db.JSON, default=list)
-
+    
     # Prompt and model info (for reference)
     prompt = db.Column(db.Text)
     model_used = db.Column(db.String(50))
-
+    
     # Quality rating (user can rate clips 1-5)
     rating = db.Column(db.Integer, default=0)  # 0 = not rated, 1-5 = star rating
     is_favorite = db.Column(db.Boolean, default=False)
     usage_count = db.Column(db.Integer, default=0)  # How many times used
-
+    
     # Status
     status = db.Column(db.String(50), default='active')  # active, archived
-
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     added_to_library_at = db.Column(db.DateTime, default=datetime.utcnow)
-
+    
     # Relationships
     original_clip = db.relationship('VideoClip', backref='library_entries')
     original_product = db.relationship('Product', backref='library_clips')
-
+    
     def __repr__(self):
         return f'<ClipLibrary {self.name}>'
-
+    
     def to_dict(self):
         return {
             'id': self.id,
-            'brand_id': self.brand_id,
             'name': self.name,
             'description': self.description,
             'content_type': self.content_type,
@@ -724,66 +679,64 @@ class ClipLibrary(db.Model):
 
 class UseCaseLibraryClip(db.Model):
     """Association table linking library clips to use cases."""
-
+    
     __tablename__ = 'use_case_library_clips'
-
+    
     id = db.Column(db.Integer, primary_key=True)
     use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=False)
     library_clip_id = db.Column(db.Integer, db.ForeignKey('clip_library.id'), nullable=False)
     sequence_order = db.Column(db.Integer, default=0)
     added_at = db.Column(db.DateTime, default=datetime.utcnow)
-
+    
     # Relationship
     library_clip = db.relationship('ClipLibrary', backref='use_case_links')
-
+    
     def __repr__(self):
         return f'<UseCaseLibraryClip {self.use_case_id}:{self.library_clip_id}>'
 
 
 class FinalVideo(db.Model):
     """Final assembled video with voiceover."""
-
+    
     __tablename__ = 'final_videos'
-
+    
     id = db.Column(db.Integer, primary_key=True)
     use_case_id = db.Column(db.Integer, db.ForeignKey('use_cases.id'), nullable=False)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=True)
     script_id = db.Column(db.Integer, db.ForeignKey('scripts.id'))
-
+    
     # Video file
     file_path = db.Column(db.String(500))
     thumbnail_path = db.Column(db.String(500))
-
+    
     # Audio
     voiceover_path = db.Column(db.String(500))
-
+    
     # Metadata
     duration = db.Column(db.Float)  # Final duration in seconds
     resolution = db.Column(db.String(20))  # e.g., "1080x1920"
     file_size = db.Column(db.Integer)  # Size in bytes
-
+    
     # Assembly info
     clip_ids = db.Column(db.JSON, default=list)  # Ordered list of clip IDs used
     assembly_settings = db.Column(db.JSON, default=dict)  # ffmpeg settings, transitions, etc.
-
+    
     # Status
     status = db.Column(db.String(50), default='pending')  # pending, assembling, complete, error
     error_message = db.Column(db.Text)
-
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime)
-
+    
     # Relationships
     script = db.relationship('Script', backref='final_videos')
-
+    
     def __repr__(self):
         return f'<FinalVideo {self.id}>'
-
+    
     def to_dict(self):
         return {
             'id': self.id,
             'use_case_id': self.use_case_id,
-            'brand_id': self.brand_id,
             'script_id': self.script_id,
             'file_path': self.file_path,
             'thumbnail_path': self.thumbnail_path,
@@ -804,8 +757,6 @@ class ActivityLog(db.Model):
     __tablename__ = 'activity_logs'
 
     id = db.Column(db.Integer, primary_key=True)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     event_type = db.Column(db.String(100), nullable=False)
     title = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text)
@@ -818,8 +769,6 @@ class ActivityLog(db.Model):
     def to_dict(self) -> dict:
         return {
             'id': self.id,
-            'brand_id': self.brand_id,
-            'user_id': self.user_id,
             'event_type': self.event_type,
             'title': self.title,
             'description': self.description,
@@ -829,3 +778,4 @@ class ActivityLog(db.Model):
             'meta_data': self.meta_data or {},
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+

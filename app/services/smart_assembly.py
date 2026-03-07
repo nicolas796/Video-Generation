@@ -7,8 +7,6 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-import cv2
-
 from app import db
 from app.models import UseCase, VideoClip, FinalVideo, Script
 from app.services.video_assembly import VideoAssembler, FFmpegError

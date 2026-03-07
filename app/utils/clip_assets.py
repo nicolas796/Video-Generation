@@ -4,8 +4,12 @@ from __future__ import annotations
 import os
 from typing import Dict, Optional
 
-import cv2
 import requests
+
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    cv2 = None
 
 
 def download_clip_assets(clip, video_url: str, upload_root: str, logger=None) -> Dict[str, Optional[str]]:
@@ -61,6 +65,10 @@ def download_clip_assets(clip, video_url: str, upload_root: str, logger=None) ->
 
 def generate_clip_thumbnail(video_path: str, use_case_id: int, clip_id: int, upload_root: str, logger=None) -> Optional[str]:
     """Generate a thumbnail for the downloaded clip."""
+    if cv2 is None:
+        if logger:
+            logger.warning('cv2 not available; skipping thumbnail generation', extra={'clip_id': clip_id})
+        return None
     try:
         cap = cv2.VideoCapture(video_path)
     except Exception as exc:  # pragma: no cover - best effort logging only
