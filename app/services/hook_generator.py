@@ -7,13 +7,17 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 import httpx
 from openai import OpenAI
 
 from app.utils import api_retry
 from app.utils.retry import RetryConfig
+
+if TYPE_CHECKING:  # pragma: no cover - helpful for type checkers only
+    from app.models import Product, UseCase
+
 
 LOGGER_NAME = __name__
 DEFAULT_MODEL = os.getenv("HOOK_GENERATOR_MODEL", "openai/gpt-5.1-codex")
@@ -26,6 +30,23 @@ HOOK_API_RETRY_CONFIG = RetryConfig(
     max_delay=float(os.getenv("HOOK_API_MAX_DELAY", "3.0")),
     jitter=float(os.getenv("HOOK_API_JITTER", "0.2")),
 )
+
+
+def build_hook_product_payload(product: "Product", use_case: "UseCase") -> Dict[str, Any]:
+    """Normalize product + use-case details for hook generation inputs."""
+
+    specs = product.specifications or {}
+    return {
+        "name": product.name,
+        "description": product.description,
+        "brand": product.brand,
+        "specifications": specs,
+        "images": product.images or [],
+        "price": product.price,
+        "currency": product.currency,
+        "target_audience": use_case.target_audience or specs.get("Audience") or "",
+        "goal": use_case.goal,
+    }
 
 
 def _clean_sentence(value: str) -> str:

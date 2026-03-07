@@ -473,6 +473,9 @@ let selectedVariantIndex = existingHook && Number.isInteger(existingHook.winning
     : null;
 let hookReadyForScript = Number.isInteger(selectedVariantIndex);
 let isGenerating = false;
+let currentHookStatus = existingHook ? (existingHook.status || null) : null;
+let autoPreviewPending = false;
+let previewGenerationInFlight = false;
 let activeAnimationTaskId = null;
 let statusPollInterval = null;
 let latestHookState = existingHook || null;
@@ -512,6 +515,7 @@ const animateProgressBar = document.getElementById('animateProgressBar');
 
 const statusMeta = {
     draft: { label: 'Draft', message: 'Concept ready – generate previews', chip: 'status-pending', badge: 'badge bg-secondary text-white', step: 'choose' },
+    generating: { label: 'Generating', message: 'Hook concepts are being crafted...', chip: 'status-running', badge: 'badge bg-info text-dark', step: 'choose' },
     preview_ready: { label: 'Previews Ready', message: 'Variants are ready to review', chip: 'status-ready', badge: 'badge bg-success text-white', step: 'preview' },
     ready_for_animation: { label: 'Variant Locked', message: 'Animate the winning hook when ready', chip: 'status-ready', badge: 'badge bg-primary text-white', step: 'animate' },
     animating: { label: 'Animating', message: 'Motion preview rendering in the background', chip: 'status-running', badge: 'badge bg-warning text-dark', step: 'animate' },
@@ -607,8 +611,8 @@ document.addEventListener('visibilitychange', () => {
 
 async function createHook() {
     if (isGenerating) return;
-    setLoading(true, 'Generating hook concepts...', { overlay: true });
-    showAlert('info', 'Creating fresh hook concepts...');
+    setLoading(true, 'Queuing hook concepts...', { overlay: true });
+    showAlert('info', 'Queuing fresh hook concepts...');
     try {
         const response = await fetch(`/api/use-cases/${useCaseId}/hook`, {
             method: 'POST',
@@ -622,15 +626,18 @@ async function createHook() {
         if (data.hook && data.hook.id) {
             currentHookId = data.hook.id;
         }
-        latestHookState = data.hook;
-        variants = data.hook && data.hook.variants ? data.hook.variants : [];
+        latestHookState = data.hook || {};
+        variants = [];
+        imageUrls = [];
+        audioManifest = {};
         selectedVariantIndex = null;
         hookReadyForScript = false;
-        regenBtn.disabled = false;
-        refreshBtn.disabled = false;
+        autoPreviewPending = true;
+        previewGenerationInFlight = false;
+        if (regenBtn) { regenBtn.disabled = true; }
+        if (refreshBtn) { refreshBtn.disabled = !currentHookId; }
         applyHookState(data.hook || {}, { seedTimeline: true });
-        showAlert('success', 'Hook concepts created. Generating previews next...');
-        await generatePreviews();
+        showAlert('info', 'Hook generation queued. We'll refresh automatically.');
         startStatusPolling();
     } catch (error) {
         showAlert('danger', error.message || 'Failed to generate hook concepts');
@@ -640,7 +647,17 @@ async function createHook() {
 }
 
 async function generatePreviews() {
-    if (!currentHookId) return;
+    if (!currentHookId || previewGenerationInFlight) return;
+    if (currentHookStatus === 'generating') {
+        showAlert('info', 'Still generating hook variants. Hang tight.');
+        return;
+    }
+    if (!variants.length) {
+        showAlert('info', 'Hook variants are not ready yet.');
+        return;
+    }
+    previewGenerationInFlight = true;
+    autoPreviewPending = false;
     setPreviewStatus('running', 'Generating previews...');
     setLoading(true, 'Generating previews...', { overlay: true });
     showVariantSkeletons();
@@ -672,6 +689,7 @@ async function generatePreviews() {
     } finally {
         hideVariantSkeletons();
         setLoading(false, null, { overlay: true });
+        previewGenerationInFlight = false;
     }
 }
 
@@ -784,11 +802,20 @@ function applyHookState(hook, options = {}) {
         renderVariants();
     }
     const status = (hook.status || '').toLowerCase();
+    currentHookStatus = status;
     updateStatusSummary(status, hook.error_message);
     updateProgressByStatus(status);
     updateAnimateUI(hook);
     updateNextStepUI();
     updateActionButtons();
+    if (status === 'failed') {
+        autoPreviewPending = false;
+    }
+    const hasPreviewAssets = Boolean((hook.image_paths && hook.image_paths.length) || (hook.image_urls && hook.image_urls.length));
+    if (autoPreviewPending && status === 'draft' && variants.length && !hasPreviewAssets) {
+        autoPreviewPending = false;
+        setTimeout(() => generatePreviews(), 250);
+    }
     if (options.seedTimeline && status && !timelineEvents.length) {
         appendTimelineEntry(status, hook.error_message || (statusMeta[status] ? statusMeta[status].message : statusMeta.default.message));
         lastStatusValue = status;
@@ -829,10 +856,15 @@ function updateVariantsVisibility(hasVariants) {
     if (!previewSection) return;
     previewSection.style.display = 'block';
     if (hasVariants) {
+        hideVariantSkeletons();
         variantsEmptyState.classList.add('d-none');
+    } else if (currentHookStatus === 'generating') {
+        variantsEmptyState.classList.add('d-none');
+        showVariantSkeletons();
     } else if (isGenerating) {
         variantsEmptyState.classList.add('d-none');
     } else {
+        hideVariantSkeletons();
         variantsEmptyState.classList.remove('d-none');
     }
 }
@@ -939,7 +971,9 @@ function updateStatusSummary(status, errorMessage) {
         liveStatusLabel.textContent = meta.label;
         liveStatusLabel.className = meta.badge;
     }
-    if (!variants.length && status === 'draft') {
+    if (status === 'generating') {
+        setPreviewStatus('running', 'Generating hook concepts...');
+    } else if (!variants.length && status === 'draft') {
         setPreviewStatus('pending', 'Generate previews to continue');
     } else if (variants.length) {
         setPreviewStatus('ready', 'Previews ready');
@@ -973,10 +1007,24 @@ function markProgress(activeStep) {
 function updateActionButtons() {
     const status = ((latestHookState && latestHookState.status) || '').toLowerCase();
     const isAnimating = status === 'animating';
-    animateBtn.disabled = selectedVariantIndex === null || isAnimating || !currentHookId;
-    regenBtn.disabled = !currentHookId || isAnimating;
-    refreshBtn.disabled = !currentHookId;
-    nextButton.disabled = !hookReadyForScript;
+    const isHookGenerating = status === 'generating';
+    const disableGenerate = isGenerating || isHookGenerating;
+    const hasVariants = Array.isArray(variants) && variants.length > 0;
+    if (generateBtn) {
+        generateBtn.disabled = disableGenerate;
+    }
+    if (regenBtn) {
+        regenBtn.disabled = disableGenerate || !currentHookId || !hasVariants || isAnimating;
+    }
+    if (refreshBtn) {
+        refreshBtn.disabled = !currentHookId;
+    }
+    if (animateBtn) {
+        animateBtn.disabled = selectedVariantIndex === null || isAnimating || !currentHookId;
+    }
+    if (nextButton) {
+        nextButton.disabled = !hookReadyForScript;
+    }
 }
 
 function updateNextStepUI() {
@@ -1092,13 +1140,14 @@ function stopStatusPolling() {
 function setLoading(state, message = 'Working...', options = {}) {
     const { overlay = false } = options;
     isGenerating = state;
-    generateBtn.disabled = state;
-    regenBtn.disabled = state || !currentHookId;
-    refreshBtn.disabled = state || !currentHookId;
     if (overlay) {
         toggleOverlay(state, message);
     }
-    if (!state) {
+    if (state) {
+        if (generateBtn) { generateBtn.disabled = true; }
+        if (regenBtn) { regenBtn.disabled = true; }
+        if (refreshBtn) { refreshBtn.disabled = true; }
+    } else {
         updateActionButtons();
     }
 }

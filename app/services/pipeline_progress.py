@@ -135,6 +135,9 @@ class PipelineProgressTracker:
             if hook_status == 'failed':
                 status_value = 'error'
                 message = hook.error_message or 'Hook previews failed'
+            elif hook_status == 'generating':
+                status_value = 'running'
+                message = 'Generating hook variants'
             elif not (hook.image_paths or []):
                 status_value = 'running'
                 message = 'Generating preview assets'

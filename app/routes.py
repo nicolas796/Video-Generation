@@ -25,8 +25,10 @@ from app.services.voiceover import VoiceoverGenerator
 from app.services.video_assembly import VideoAssembler
 from app.services.smart_assembly import SmartVideoAssembler
 from app.services.pipeline_progress import PipelineProgressTracker, PipelineRecoveryService, build_hook_script_payload
-from app.services.hook_generator import HookGenerator, HOOK_TEMPLATES
+from app.services.hook_generator import HOOK_TEMPLATES, build_hook_product_payload
 from app.services.hook_image_generator import HookImageGenerator
+
+from app.tasks.hook_tasks import generate_hook_variants
 
 from app.utils.clip_assets import download_clip_assets
 
@@ -184,22 +186,6 @@ def _verify_pollo_signature(secret: str, provided_signature: Optional[str], raw_
     provided = provided_signature.split('=', 1)[-1].strip()
     return hmac.compare_digest(digest, provided)
 
-
-
-def _build_hook_product_payload(product: Product, use_case: UseCase) -> Dict[str, Any]:
-    specs = product.specifications or {}
-    payload = {
-        'name': product.name,
-        'description': product.description,
-        'brand': product.brand,
-        'specifications': specs,
-        'images': product.images or [],
-        'price': product.price,
-        'currency': product.currency,
-        'target_audience': use_case.target_audience or specs.get('Audience') or '',
-        'goal': use_case.goal,
-    }
-    return payload
 
 
 def _get_upload_root() -> str:
@@ -1117,16 +1103,10 @@ def create_or_update_hook(use_case_id):
     if hook_type not in HOOK_TEMPLATES:
         return jsonify({'success': False, 'error': f'Invalid hook type: {hook_type}'}), 400
 
-    generator = HookGenerator(api_key=current_app.config.get('OPENAI_API_KEY'))
-    payload = _build_hook_product_payload(product, use_case)
-
-    try:
-        variants = generator.generate_variants(payload, hook_type, count=3)
-    except Exception as exc:  # pragma: no cover - surface to caller
-        current_app.logger.exception('Hook generation failed for use_case %s', use_case_id)
-        return jsonify({'success': False, 'error': f'Hook generation failed: {exc}'}), 500
-
     hook = Hook.query.filter_by(use_case_id=use_case_id).first()
+    if hook and (hook.status or '').lower() == 'generating':
+        return jsonify({'success': False, 'error': 'Hook generation already in progress.'}), 409
+
     if not hook:
         hook = Hook(use_case_id=use_case_id, hook_type=hook_type)
         db.session.add(hook)
@@ -1137,16 +1117,19 @@ def create_or_update_hook(use_case_id):
             shutil.rmtree(assets_folder, ignore_errors=True)
 
     hook.hook_type = hook_type
-    hook.variants = variants
+    hook.variants = []
     hook.image_paths = []
     hook.audio_path = None
     hook.video_path = None
     hook.winning_variant_index = None
-    hook.status = 'draft'
+    hook.status = 'generating'
     hook.error_message = None
     db.session.commit()
 
-    return jsonify({'success': True, 'hook': hook.to_dict()})
+    task = generate_hook_variants.apply_async(kwargs={'hook_id': hook.id})
+    hook_payload = hook.to_dict()
+
+    return jsonify({'success': True, 'hook': hook_payload, 'task_id': task.id}), 202
 
 
 @main_bp.route('/api/hooks/<int:hook_id>/generate-previews', methods=['POST'])
@@ -1161,7 +1144,7 @@ def generate_hook_previews(hook_id):
         return jsonify({'success': False, 'error': 'No hook variants available. Generate hooks first.'}), 400
 
     hook_folder = _ensure_clean_hook_folder(hook_id)
-    product_payload = _build_hook_product_payload(product, use_case)
+    product_payload = build_hook_product_payload(product, use_case)
 
     try:
         image_generator = HookImageGenerator(api_key=current_app.config.get('FLUX_API_KEY'))

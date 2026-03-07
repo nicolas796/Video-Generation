@@ -409,6 +409,10 @@ class Product(db.Model):
             set_stage_state('hook', 'current', summary, enabled=True)
             return build_response('hook', summary, progress_pct)
 
+        if hook_status == 'generating':
+            set_stage_state('hook', 'current', 'Generating hook variants', enabled=True)
+            return build_response('hook', 'Generating hook variants', progress_pct)
+
         if not (hook.image_paths or []):
             set_stage_state('hook', 'current', 'Generate preview assets', enabled=True)
             return build_response('hook', 'Generate hook previews', progress_pct)

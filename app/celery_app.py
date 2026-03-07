@@ -21,7 +21,7 @@ celery = Celery(
     'product_video_generator',
     broker=broker_url,
     backend=result_backend,
-    include=['app.tasks.video_tasks']
+    include=['app.tasks.video_tasks', 'app.tasks.hook_tasks']
 )
 
 # Additional configuration
