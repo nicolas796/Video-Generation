@@ -637,7 +637,7 @@ async function createHook() {
         if (regenBtn) { regenBtn.disabled = true; }
         if (refreshBtn) { refreshBtn.disabled = !currentHookId; }
         applyHookState(data.hook || {}, { seedTimeline: true });
-        showAlert('info', 'Hook generation queued. We'll refresh automatically.');
+        showAlert('info', "Hook generation queued. We'll refresh automatically.");
         startStatusPolling();
     } catch (error) {
         showAlert('danger', error.message || 'Failed to generate hook concepts');
