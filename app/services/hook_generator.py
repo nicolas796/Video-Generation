@@ -13,10 +13,19 @@ import httpx
 from openai import OpenAI
 
 from app.utils import api_retry
+from app.utils.retry import RetryConfig
 
 LOGGER_NAME = __name__
 DEFAULT_MODEL = os.getenv("HOOK_GENERATOR_MODEL", "openai/gpt-5.1-codex")
 DEFAULT_RATE_LIMIT_DELAY = float(os.getenv("HOOK_API_DELAY", "0.12"))
+HOOK_API_TIMEOUT = float(os.getenv("HOOK_API_TIMEOUT", "15"))
+HOOK_API_RETRY_CONFIG = RetryConfig(
+    retries=int(os.getenv("HOOK_API_RETRIES", "2")),
+    base_delay=float(os.getenv("HOOK_API_BASE_DELAY", "0.75")),
+    backoff=float(os.getenv("HOOK_API_BACKOFF", "2.0")),
+    max_delay=float(os.getenv("HOOK_API_MAX_DELAY", "3.0")),
+    jitter=float(os.getenv("HOOK_API_JITTER", "0.2")),
+)
 
 
 def _clean_sentence(value: str) -> str:
@@ -235,7 +244,7 @@ class HookGenerator:
         self.request_delay = max(0.12, request_delay)
         self.client: Optional[OpenAI] = None
         if self.api_key:
-            http_client = httpx.Client(timeout=45.0, follow_redirects=True)
+            http_client = httpx.Client(timeout=HOOK_API_TIMEOUT, follow_redirects=True)
             self.client = OpenAI(api_key=self.api_key, http_client=http_client)
 
     # ------------------------------------------------------------------
@@ -274,7 +283,7 @@ class HookGenerator:
         return variants
 
     # ------------------------------------------------------------------
-    @api_retry(label="hook_ai", exceptions=(Exception,))
+    @api_retry(label="hook_ai", exceptions=(Exception,), config=HOOK_API_RETRY_CONFIG)
     def _call_completion(self, messages: List[Dict[str, str]], temperature: float = 0.85) -> Dict[str, Any]:
         if not self.client:
             raise RuntimeError("OpenAI client unavailable")
