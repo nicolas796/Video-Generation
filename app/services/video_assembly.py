@@ -64,7 +64,8 @@ class VideoAssembler:
         transition: str = "cut",
         quality: str = "medium",
         format_override: Optional[str] = None,
-        transition_duration: float = 0.5
+        transition_duration: float = 0.5,
+        subtitle_style: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create the final video for a use case."""
         clips = VideoClip.query.filter_by(
@@ -165,6 +166,30 @@ class VideoAssembler:
                     ])
                     video_duration = audio_duration
 
+            # ── Burn subtitles (optional) ─────────────────────────
+            subtitle_ass_path = None
+            if subtitle_style and script and script.content:
+                from app.services.subtitle_generator import SubtitleGenerator
+                sub_gen = SubtitleGenerator(
+                    upload_folder=self.upload_folder,
+                    ffmpeg_path=self.ffmpeg_path,
+                )
+                subtitle_ass_path = sub_gen.generate(
+                    script_text=script.content,
+                    audio_path=audio_path,
+                    output_dir=tmp_dir,
+                    style_name=subtitle_style,
+                    video_width=width,
+                    video_height=height,
+                )
+
+            if subtitle_ass_path and os.path.exists(subtitle_ass_path):
+                subtitled_path = os.path.join(tmp_dir, "subtitled_video.mp4")
+                self._burn_subtitles(
+                    paced_path, subtitle_ass_path, subtitled_path, quality_preset
+                )
+                paced_path = subtitled_path
+
             # Overlay audio and finalize (or just finalize without audio)
             use_case_folder = os.path.join(self.final_folder, str(use_case.id))
             os.makedirs(use_case_folder, exist_ok=True)
@@ -209,6 +234,7 @@ class VideoAssembler:
 
             final_video = FinalVideo(
                 use_case_id=use_case.id,
+                brand_id=use_case.brand_id,
                 script_id=script.id if script else None,
                 file_path=rel_path,
                 thumbnail_path=thumbnail_rel,
@@ -223,7 +249,8 @@ class VideoAssembler:
                     "format": format_key,
                     "transition_duration": transition_duration,
                     "video_duration": video_duration,
-                    "audio_duration": audio_duration
+                    "audio_duration": audio_duration,
+                    "subtitle_style": subtitle_style,
                 },
                 status="complete",
                 completed_at=datetime.utcnow()
@@ -266,6 +293,31 @@ class VideoAssembler:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------
+    def _burn_subtitles(
+        self,
+        video_path: str,
+        ass_path: str,
+        output_path: str,
+        quality_preset: Dict[str, Any],
+    ) -> None:
+        """Hard-burn an ASS subtitle file onto the video."""
+        # The ass filter needs the path with escaped colons/backslashes
+        escaped = ass_path.replace("\\", "\\\\").replace(":", "\\:")
+        self._run_ffmpeg(
+            [
+                self.ffmpeg_path, "-y",
+                "-i", video_path,
+                "-vf", f"ass='{escaped}'",
+                "-c:v", "libx264",
+                "-preset", quality_preset["preset"],
+                "-crf", str(quality_preset["crf"]),
+                "-an",
+                output_path,
+            ],
+            description="burning subtitles",
+        )
+
+    # ------------------------------------------------------------------
     def _normalize_clip(self, clip_path: str, width: int, height: int, tmp_dir: str) -> str:
         normalized = os.path.join(tmp_dir, f"clip_{uuid.uuid4().hex[:8]}_norm.mp4")
         # Use scale then crop for 'cover' behavior (fill frame, crop excess)
@@ -278,6 +330,7 @@ class VideoAssembler:
             "-r", "30",
             "-an",
             "-c:v", "libx264",
+            "-threads", "1",
             "-preset", "fast",
             "-crf", "20",
             normalized
@@ -286,18 +339,20 @@ class VideoAssembler:
 
     def _concat_with_cuts(self, clips: List[str], tmp_dir: str, quality: Dict[str, str]) -> str:
         output = os.path.join(tmp_dir, "concat_cut.mp4")
-        cmd = [self.ffmpeg_path, "-y"]
-        for clip in clips:
-            cmd.extend(["-i", clip])
-        concat_filter = "".join([f"[{i}:v]" for i in range(len(clips))]) + f"concat=n={len(clips)}:v=1:a=0[outv]"
-        cmd.extend([
-            "-filter_complex", concat_filter,
-            "-map", "[outv]",
-            "-c:v", "libx264",
-            "-preset", quality["preset"],
-            "-crf", str(quality["crf"]),
+        # Use concat demuxer with stream copy — clips are already normalized to
+        # the same resolution/codec/framerate, so no re-encoding needed.
+        # This uses almost zero memory compared to filter_complex or re-encode.
+        list_path = os.path.join(tmp_dir, "concat_list.txt")
+        with open(list_path, "w") as f:
+            for clip in clips:
+                f.write(f"file '{clip}'\n")
+        cmd = [
+            self.ffmpeg_path, "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", list_path,
+            "-c", "copy",
             output
-        ])
+        ]
         self._run_ffmpeg(cmd)
         return output
 
@@ -329,6 +384,7 @@ class VideoAssembler:
                 "-filter_complex", filter_complex,
                 "-map", "[vout]",
                 "-c:v", "libx264",
+                "-threads", "1",
                 "-preset", quality["preset"],
                 "-crf", str(quality["crf"]),
                 output
@@ -364,7 +420,14 @@ class VideoAssembler:
     def _resolve_path(self, maybe_relative: str) -> str:
         if os.path.isabs(maybe_relative):
             return maybe_relative
-        return os.path.join(self.upload_folder, maybe_relative)
+        resolved = os.path.join(self.upload_folder, maybe_relative)
+        # Guard against doubled 'uploads/' segments (e.g. /var/data/uploads/uploads/clips/...)
+        doubled = os.path.join(self.upload_folder, 'uploads')
+        if resolved.startswith(doubled + os.sep):
+            fixed = os.path.join(self.upload_folder, resolved[len(doubled) + 1:])
+            if os.path.exists(fixed):
+                return fixed
+        return resolved
 
     def _probe_duration(self, media_path: str) -> Optional[float]:
         try:
@@ -389,9 +452,9 @@ class VideoAssembler:
         """Run ffmpeg command with proper error handling."""
         try:
             result = subprocess.run(
-                cmd, 
-                check=True, 
-                stdout=subprocess.PIPE, 
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True
             )

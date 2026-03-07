@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accept Invitation - {{ brand.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .invite-container { width: 100%; max-width: 460px; padding: 2rem; }
+        .invite-card {
+            background: white;
+            border-radius: 16px;
+            padding: 2.5rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        .invite-header { text-align: center; margin-bottom: 2rem; }
+        .invite-header i { font-size: 3rem; color: #667eea; }
+        .invite-header h1 { font-size: 1.4rem; font-weight: 600; margin-top: 1rem; color: #333; }
+        .brand-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+        .role-badge {
+            display: inline-block;
+            background: #f0f0f0;
+            color: #555;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+        }
+        .form-floating { margin-bottom: 1rem; }
+        .btn-accept {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 0.75rem;
+            font-weight: 600;
+            width: 100%;
+            margin-top: 0.5rem;
+            color: #fff;
+        }
+        .btn-accept:hover { opacity: 0.9; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="invite-container">
+        <div class="invite-card">
+            <div class="invite-header">
+                <i class="bi bi-people"></i>
+                <h1>You've Been Invited</h1>
+            </div>
+
+            <div class="text-center mb-4">
+                <p class="mb-2">Join the workspace</p>
+                <span class="brand-badge">{{ brand.name }}</span>
+                <div class="mt-2">
+                    <span class="role-badge">Role: {{ invitation.role }}</span>
+                </div>
+            </div>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+
+            {% if logged_in %}
+                {# Already logged in — just accept #}
+                <p class="text-center text-muted">
+                    Logged in as <strong>{{ current_user.username }}</strong>
+                </p>
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-accept">
+                        <i class="bi bi-check-circle me-1"></i>Accept &amp; Join
+                    </button>
+                </form>
+                <div class="text-center mt-3">
+                    <small class="text-muted">
+                        Not you? <a href="{{ url_for('auth.logout') }}">Log out</a> first.
+                    </small>
+                </div>
+            {% else %}
+                {# New user — create account #}
+                <p class="text-muted small text-center mb-3">
+                    Create an account to accept this invitation.
+                    Already have one? <a href="{{ url_for('auth.login', next=request.path) }}">Log in</a>.
+                </p>
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="form-floating">
+                        <input type="text" class="form-control" id="username" name="username" placeholder="Username" required autofocus>
+                        <label for="username"><i class="bi bi-person me-1"></i>Username</label>
+                    </div>
+                    <div class="form-floating">
+                        <input type="password" class="form-control" id="password" name="password" placeholder="Password" required>
+                        <label for="password"><i class="bi bi-lock me-1"></i>Password</label>
+                    </div>
+                    <div class="form-floating">
+                        <input type="password" class="form-control" id="confirm_password" name="confirm_password" placeholder="Confirm" required>
+                        <label for="confirm_password"><i class="bi bi-lock me-1"></i>Confirm Password</label>
+                    </div>
+                    <button type="submit" class="btn btn-accept">
+                        <i class="bi bi-person-plus me-1"></i>Create Account &amp; Join
+                    </button>
+                </form>
+            {% endif %}
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

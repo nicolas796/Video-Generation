@@ -35,6 +35,39 @@
     .clip-detail-modal video { width: 100%; border-radius: 8px; background: #000; }
     .prompt-box { background: #f8f9fa; padding: 0.75rem; border-radius: 8px; font-size: 0.85rem; white-space: pre-wrap; border: 1px solid #e9ecef; }
     @media (max-width: 576px) { .clip-library-card .clip-thumb { aspect-ratio: 1/1; } }
+
+    /* ── Subtitle style picker ────────────────────────────── */
+    .subtitle-styles-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+    .subtitle-style-card { border: 2px solid #e9ecef; border-radius: 10px; overflow: hidden; cursor: pointer; transition: all 0.2s ease; background: #fff; }
+    .subtitle-style-card:hover { border-color: #6c757d; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .subtitle-style-card.active { border-color: #0d6efd; box-shadow: 0 0 0 3px rgba(13,110,253,0.2); }
+    .subtitle-style-label { font-size: 0.75rem; font-weight: 600; padding: 0.3rem 0.5rem 0; color: #212529; }
+    .subtitle-style-desc { font-size: 0.65rem; color: #6c757d; padding: 0 0.5rem 0.4rem; }
+
+    /* Shared preview container — simulates a dark video frame */
+    .subtitle-preview { position: relative; height: 64px; overflow: hidden; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 6px; }
+    .subtitle-preview .sp-bg { position: absolute; inset: 0; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); z-index: 0; }
+    .subtitle-preview .sp-text { position: relative; z-index: 1; font-size: 0.7rem; line-height: 1.3; max-width: 90%; text-align: center; }
+
+    /* Clean — white text with thin dark outline */
+    .subtitle-preview-clean .sp-text { color: #fff; text-shadow: 1px 1px 2px #000, -1px -1px 2px #000, 1px -1px 2px #000, -1px 1px 2px #000; font-family: Arial, sans-serif; }
+
+    /* Bold Impact — large uppercase, thick black stroke */
+    .subtitle-preview-bold .sp-text { color: #fff; font-family: Impact, 'Arial Black', sans-serif; font-size: 0.8rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.04em; text-shadow: 2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 0 2px 0 #000, 0 -2px 0 #000, 2px 0 0 #000, -2px 0 0 #000; }
+
+    /* Boxed — white on dark semi-transparent box */
+    .subtitle-preview-boxed .sp-text { color: #fff; font-family: Arial, sans-serif; background: rgba(0,0,0,0.7); padding: 2px 8px; border-radius: 3px; }
+
+    /* Karaoke — white with highlighted word in yellow */
+    .subtitle-preview-karaoke .sp-text { color: #fff; font-family: Arial, sans-serif; text-shadow: 1px 1px 3px #000, -1px -1px 3px #000; }
+    .subtitle-preview-karaoke .sp-text em { font-style: normal; color: #ffe600; font-weight: 700; }
+
+    /* Minimal — small light gray, bottom-left */
+    .subtitle-preview-minimal { justify-content: flex-start; padding-left: 10px; }
+    .subtitle-preview-minimal .sp-text { color: #ccc; font-family: Helvetica, Arial, sans-serif; font-size: 0.6rem; text-shadow: 1px 1px 1px rgba(0,0,0,0.5); }
+
+    /* Neon Pop — cyan text with magenta glow */
+    .subtitle-preview-neon .sp-text { color: #00ffff; font-family: 'Arial Black', Impact, sans-serif; font-weight: 900; font-size: 0.75rem; text-shadow: 0 0 6px #ff00ff, 0 0 12px #ff00ff, 1px 1px 2px #000; }
 </style>
 {% endblock %}
 
@@ -156,14 +189,91 @@
 </div>
 
 <div class="modal fade" id="renderModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header"><h5 class="modal-title"><i class="bi bi-rocket me-2"></i>Final Render</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
             <div class="modal-body">
-                <div class="mb-3"><label for="renderQuality" class="form-label">Quality</label><select id="renderQuality" class="form-select"><option value="high">1080p (High)</option><option value="medium" selected>720p (Medium)</option><option value="low">480p (Low)</option></select></div>
-                <div class="mb-3"><label for="renderTransitions" class="form-label">Transitions</label><select id="renderTransitions" class="form-select"><option value="cut" selected>Cut</option><option value="fade">Fade</option></select></div>
-                <div class="form-check"><input type="checkbox" class="form-check-input" id="includeVoiceover"><label class="form-check-label" for="includeVoiceover">Include Voiceover (ElevenLabs)</label><div class="form-text text-muted small">Uncheck if no voiceover API key configured</div></div>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="mb-3"><label for="renderQuality" class="form-label">Quality</label><select id="renderQuality" class="form-select"><option value="high">1080p (High)</option><option value="medium" selected>720p (Medium)</option><option value="low">480p (Low)</option></select></div>
+                        <div class="mb-3"><label for="renderTransitions" class="form-label">Transitions</label><select id="renderTransitions" class="form-select"><option value="cut" selected>Cut</option><option value="fade">Fade</option></select></div>
+                        <div class="form-check mb-3"><input type="checkbox" class="form-check-input" id="includeVoiceover" checked><label class="form-check-label" for="includeVoiceover">Include Voiceover (ElevenLabs)</label><div class="form-text text-muted small">Uncheck if no voiceover API key configured</div></div>
+                        <hr>
+                        <div class="form-check form-switch mb-3">
+                            <input type="checkbox" class="form-check-input" id="enableSubtitles" onchange="toggleSubtitleOptions()">
+                            <label class="form-check-label fw-medium" for="enableSubtitles"><i class="bi bi-chat-square-text me-1"></i>Add Subtitles</label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div id="subtitleOptions" style="display: none;">
+                            <label class="form-label fw-medium mb-2">Subtitle Style</label>
+                            <div class="subtitle-styles-grid" id="subtitleStylesGrid">
+
+                                <div class="subtitle-style-card active" data-style="clean" onclick="selectSubtitleStyle('clean')">
+                                    <div class="subtitle-preview subtitle-preview-clean">
+                                        <div class="sp-bg"></div>
+                                        <span class="sp-text">Experience the difference today.</span>
+                                    </div>
+                                    <div class="subtitle-style-label">Clean</div>
+                                    <div class="subtitle-style-desc">White text, thin outline</div>
+                                </div>
+
+                                <div class="subtitle-style-card" data-style="bold_impact" onclick="selectSubtitleStyle('bold_impact')">
+                                    <div class="subtitle-preview subtitle-preview-bold">
+                                        <div class="sp-bg"></div>
+                                        <span class="sp-text">EXPERIENCE THE DIFFERENCE</span>
+                                    </div>
+                                    <div class="subtitle-style-label">Bold Impact</div>
+                                    <div class="subtitle-style-desc">Large uppercase, thick stroke</div>
+                                </div>
+
+                                <div class="subtitle-style-card" data-style="boxed" onclick="selectSubtitleStyle('boxed')">
+                                    <div class="subtitle-preview subtitle-preview-boxed">
+                                        <div class="sp-bg"></div>
+                                        <span class="sp-text">Experience the difference today.</span>
+                                    </div>
+                                    <div class="subtitle-style-label">Boxed</div>
+                                    <div class="subtitle-style-desc">Dark background box</div>
+                                </div>
+
+                                <div class="subtitle-style-card" data-style="karaoke" onclick="selectSubtitleStyle('karaoke')">
+                                    <div class="subtitle-preview subtitle-preview-karaoke">
+                                        <div class="sp-bg"></div>
+                                        <span class="sp-text">Experience <em>the difference</em> today.</span>
+                                    </div>
+                                    <div class="subtitle-style-label">Karaoke</div>
+                                    <div class="subtitle-style-desc">Word-by-word highlight</div>
+                                </div>
+
+                                <div class="subtitle-style-card" data-style="minimal" onclick="selectSubtitleStyle('minimal')">
+                                    <div class="subtitle-preview subtitle-preview-minimal">
+                                        <div class="sp-bg"></div>
+                                        <span class="sp-text">Experience the difference today.</span>
+                                    </div>
+                                    <div class="subtitle-style-label">Minimal</div>
+                                    <div class="subtitle-style-desc">Small, subtle, bottom-left</div>
+                                </div>
+
+                                <div class="subtitle-style-card" data-style="neon_pop" onclick="selectSubtitleStyle('neon_pop')">
+                                    <div class="subtitle-preview subtitle-preview-neon">
+                                        <div class="sp-bg"></div>
+                                        <span class="sp-text">Experience the difference today.</span>
+                                    </div>
+                                    <div class="subtitle-style-label">Neon Pop</div>
+                                    <div class="subtitle-style-desc">Colored glow effect</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="subtitleDisabledHint" class="align-items-center justify-content-center h-100 text-muted" style="display: flex;">
+                            <div class="text-center">
+                                <i class="bi bi-chat-square-text" style="font-size: 2.5rem; opacity: 0.3;"></i>
+                                <p class="mt-2 mb-0 small">Enable subtitles to choose a style</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
+            <div id="renderError" class="alert alert-danger mx-3 mb-0 d-none" role="alert"></div>
             <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button type="button" class="btn btn-success" onclick="startRender()"><i class="bi bi-play-fill me-1"></i>Start Render</button></div>
         </div>
     </div>
@@ -245,10 +355,18 @@ let assemblyReady = false;
 
 function updateButtons() {
     const complete = analysisSummary.complete || 0, analyzed = analysisSummary.analyzed || 0;
-    document.getElementById('analyzeBtn').disabled = complete === 0; 
+    document.getElementById('analyzeBtn').disabled = complete === 0;
     document.getElementById('autoOrderBtn').disabled = analyzed === 0;
-    document.getElementById('optimizeBtn').disabled = analyzed === 0; 
-    document.getElementById('renderBtn').disabled = !assemblyReady;
+    document.getElementById('optimizeBtn').disabled = analyzed === 0;
+    const renderBtn = document.getElementById('renderBtn');
+    renderBtn.disabled = !assemblyReady;
+    if (!assemblyReady && clipsData.length === 0) {
+        renderBtn.title = 'No clips available — generate clips first';
+    } else if (!assemblyReady) {
+        renderBtn.title = 'Waiting for clips to finish generating';
+    } else {
+        renderBtn.title = '';
+    }
 }
 
 function renderTimeline() {
@@ -357,13 +475,35 @@ function toggleButtonLoading(buttonId, isLoading, loadingLabel) { const button =
 function escapeHtml(str) { if (str === undefined || str === null) return ''; return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 function renderFinalVideo() { new bootstrap.Modal(document.getElementById('renderModal')).show(); }
 let assemblyPollInterval = null;
+let selectedSubtitleStyle = 'clean';
+
+function toggleSubtitleOptions() {
+    const enabled = document.getElementById('enableSubtitles').checked;
+    document.getElementById('subtitleOptions').style.display = enabled ? 'block' : 'none';
+    document.getElementById('subtitleDisabledHint').style.display = enabled ? 'none' : 'flex';
+}
+
+function selectSubtitleStyle(style) {
+    selectedSubtitleStyle = style;
+    document.querySelectorAll('.subtitle-style-card').forEach(card => {
+        card.classList.toggle('active', card.dataset.style === style);
+    });
+}
 
 async function startRender() {
     const modalBtn = document.querySelector('#renderModal .btn-success');
-    if (modalBtn) modalBtn.disabled = true;
-    toggleButtonLoading('renderBtn', true, 'Starting...');
-    
+    const errorBox = document.getElementById('renderError');
+    if (errorBox) errorBox.classList.add('d-none');
+
     try {
+        if (modalBtn) { modalBtn.disabled = true; modalBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Rendering...'; }
+        toggleButtonLoading('renderBtn', true, 'Starting...');
+
+        const subtitlesEnabled = document.getElementById('enableSubtitles')?.checked || false;
+        const subtitleStyle = subtitlesEnabled ? (selectedSubtitleStyle || 'clean') : null;
+
+        console.log('[Assembly] startRender called', { subtitlesEnabled, subtitleStyle });
+
         const response = await fetch(`/api/use-cases/${useCaseId}/assemble`, {
             method: 'POST',
             headers: {
@@ -374,29 +514,33 @@ async function startRender() {
                 quality: document.getElementById('renderQuality').value,
                 transition: document.getElementById('renderTransitions').value,
                 include_voiceover: document.getElementById('includeVoiceover').checked,
-                transition_duration: document.getElementById('renderTransitions').value === 'cut' ? 0.1 : 0.5
+                transition_duration: document.getElementById('renderTransitions').value === 'cut' ? 0.1 : 0.5,
+                subtitle_style: subtitleStyle
             })
         });
-        
+
+        console.log('[Assembly] fetch response', response.status);
         const data = await response.json();
+        console.log('[Assembly] response data', data);
+
         if (!response.ok || !data.success) throw new Error(data.error || 'Rendering failed');
-        
-        // Check if async or sync
-        if (data.async && data.task_id) {
-            // Async processing - start polling
-            bootstrap.Modal.getInstance(document.getElementById('renderModal')).hide();
-            showAssemblyProgress(data.task_id, data.poll_url);
-        } else {
-            // Sync processing - immediate completion
-            bootstrap.Modal.getInstance(document.getElementById('renderModal')).hide();
-            alert('Final video ready! Redirecting to output page.');
-            window.location.href = `/output/${useCaseId}`;
-        }
+
+        // Hide render modal, show progress
+        try { bootstrap.Modal.getOrCreateInstance(document.getElementById('renderModal')).hide(); } catch (e) { console.warn('Modal hide failed', e); }
+        showAssemblyProgress(data.task_id, data.poll_url);
+
     } catch (error) {
-        alert(error.message || 'Unable to complete render');
+        console.error('[Assembly] startRender error:', error);
+        // Show error inline in the modal (more visible than alert)
+        if (errorBox) {
+            errorBox.textContent = error.message || 'Unable to start render';
+            errorBox.classList.remove('d-none');
+        } else {
+            alert(error.message || 'Unable to complete render');
+        }
     } finally {
         toggleButtonLoading('renderBtn', false);
-        if (modalBtn) modalBtn.disabled = false;
+        if (modalBtn) { modalBtn.disabled = false; modalBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Start Render'; }
     }
 }
 

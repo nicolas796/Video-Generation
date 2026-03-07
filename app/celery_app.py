@@ -38,7 +38,7 @@ celery.conf.update(
     
     # Worker settings
     worker_prefetch_multiplier=1,  # Process one task at a time
-    worker_max_tasks_per_child=50,  # Restart worker after 50 tasks
+    worker_max_tasks_per_child=0,  # Disabled — worker runs as background process in combined service
     
     # Result storage
     result_expires=3600 * 24,  # Results expire after 24 hours

@@ -52,6 +52,7 @@ def assemble_final_video_async(
     configured_upload = upload_root or current_app.config.get('UPLOAD_FOLDER', './uploads')
     upload_folder = os.path.abspath(configured_upload)
     ffmpeg_path = current_app.config.get('FFMPEG_PATH', 'ffmpeg')
+    current_app.logger.info('Assembly task upload_folder=%s, exists=%s', upload_folder, os.path.exists(upload_folder))
 
     if upload_root and upload_root != current_app.config.get('UPLOAD_FOLDER'):
         current_app.logger.info(
@@ -94,28 +95,77 @@ def assemble_final_video_async(
         )
         
         from app.utils.clip_assets import download_clip_assets
-        
-        # Get all ready clips that need downloading
-        ready_clips = VideoClip.query.filter_by(
-            use_case_id=use_case_id,
-            status='ready'
+        from app.services.pollo_ai import PolloAIClient
+
+        # Get all clips that could be used in assembly (ready or complete).
+        # The web service may have already polled Pollo and set file_path, but
+        # that file lives on the web service's disk, not the worker's.  We must
+        # check actual file existence on the local filesystem.
+        assembly_clips = VideoClip.query.filter(
+            VideoClip.use_case_id == use_case_id,
+            VideoClip.status.in_(['ready', 'complete'])
         ).all()
-        
+
         downloaded_count = 0
-        for clip in ready_clips:
-            if clip.pollo_video_url and not clip.file_path:
+        pollo_client = None  # lazy-init only if needed
+        for clip in assembly_clips:
+            # Resolve the video URL — may need to fetch from Pollo
+            video_url = clip.pollo_video_url
+            if not video_url and clip.pollo_job_id:
+                try:
+                    if pollo_client is None:
+                        pollo_client = PolloAIClient()
+                    status_result = pollo_client.check_job_status(clip.pollo_job_id, clip=clip)
+                    if status_result.get('success'):
+                        video_url = pollo_client._extract_video_url(status_result.get('result'))
+                        if video_url:
+                            clip.pollo_video_url = video_url
+                            current_app.logger.info(
+                                "Resolved video URL from Pollo for clip missing pollo_video_url",
+                                extra={'clip_id': clip.id, 'pollo_job_id': clip.pollo_job_id}
+                            )
+                except Exception as e:
+                    current_app.logger.warning(
+                        "Failed to fetch video URL from Pollo",
+                        extra={'clip_id': clip.id, 'pollo_job_id': clip.pollo_job_id, 'error': str(e)}
+                    )
+
+            if not video_url:
+                current_app.logger.warning(
+                    "Clip has no video URL and could not resolve one, skipping",
+                    extra={'clip_id': clip.id, 'pollo_job_id': clip.pollo_job_id}
+                )
+                continue
+
+            # Check whether the file actually exists on this worker's disk
+            needs_download = False
+            if not clip.file_path:
+                needs_download = True
+            else:
+                resolved = os.path.join(upload_folder, clip.file_path)
+                if not os.path.exists(resolved):
+                    needs_download = True
+                    current_app.logger.info(
+                        "Clip file_path set but file missing on worker disk, re-downloading",
+                        extra={
+                            'clip_id': clip.id,
+                            'file_path': clip.file_path,
+                            'resolved': resolved,
+                        }
+                    )
+            if needs_download:
                 try:
                     current_app.logger.info(
                         "Downloading clip in worker",
                         extra={
                             'clip_id': clip.id,
                             'use_case_id': use_case_id,
-                            'pollo_video_url': clip.pollo_video_url[:100]
+                            'pollo_video_url': video_url[:100]
                         }
                     )
                     assets = download_clip_assets(
                         clip=clip,
-                        video_url=clip.pollo_video_url,
+                        video_url=video_url,
                         upload_root=upload_folder,
                         logger=current_app.logger
                     )
@@ -130,7 +180,7 @@ def assemble_final_video_async(
                     )
                     clip.status = 'error'
                     clip.error_message = f"Download failed: {str(e)}"
-        
+
         if downloaded_count > 0:
             db.session.commit()
             current_app.logger.info(

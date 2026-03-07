@@ -26,7 +26,8 @@ class SmartVideoAssembler(VideoAssembler):
         transition_duration: float = 0.5,
         target_duration: Optional[float] = None,
         max_clips: Optional[int] = None,  # No longer enforced as a strict limit
-        min_clips: int = 1
+        min_clips: int = 1,
+        subtitle_style: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create final video with intelligent clip selection and trimming.
         
@@ -68,9 +69,10 @@ class SmartVideoAssembler(VideoAssembler):
                         'clip_id': clip.id,
                         'file_path': clip.file_path,
                         'resolved_path': clip_path,
+                        'upload_folder': self.upload_folder,
                         'pollo_job_id': clip.pollo_job_id
                     })
-        
+
         if missing:
             error_msg = f"Selected clips missing files: {missing}"
             if missing_with_paths:
@@ -148,6 +150,14 @@ class SmartVideoAssembler(VideoAssembler):
                     quality_preset
                 )
 
+            # Free memory: delete intermediate normalized clips now that concat is done
+            for p in processed:
+                if p != stitched_path and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
             # Match pacing to voiceover (if audio exists)
             audio_duration = self._probe_duration(audio_path) if audio_path else None
             video_duration = self._probe_duration(stitched_path)
@@ -165,11 +175,42 @@ class SmartVideoAssembler(VideoAssembler):
                         "-an",
                         "-r", "30",
                         "-c:v", "libx264",
-                        "-preset", quality_preset["preset"],
+                        "-threads", "1",
+                        "-preset", "ultrafast",
                         "-crf", str(quality_preset["crf"]),
                         paced_path
                     ])
                     video_duration = audio_duration
+                    # Free stitched file now that pacing is done
+                    if os.path.exists(stitched_path):
+                        try:
+                            os.remove(stitched_path)
+                        except OSError:
+                            pass
+
+            # ── Burn subtitles (optional) ─────────────────────────
+            subtitle_ass_path = None
+            if subtitle_style and script and script.content:
+                from app.services.subtitle_generator import SubtitleGenerator
+                sub_gen = SubtitleGenerator(
+                    upload_folder=self.upload_folder,
+                    ffmpeg_path=self.ffmpeg_path,
+                )
+                subtitle_ass_path = sub_gen.generate(
+                    script_text=script.content,
+                    audio_path=audio_path,
+                    output_dir=tmp_dir,
+                    style_name=subtitle_style,
+                    video_width=width,
+                    video_height=height,
+                )
+
+            if subtitle_ass_path and os.path.exists(subtitle_ass_path):
+                subtitled_path = os.path.join(tmp_dir, "subtitled_video.mp4")
+                self._burn_subtitles(
+                    paced_path, subtitle_ass_path, subtitled_path, quality_preset
+                )
+                paced_path = subtitled_path
 
             # Overlay audio and finalize (or just finalize without audio)
             use_case_folder = os.path.join(self.final_folder, str(use_case.id))
@@ -179,34 +220,48 @@ class SmartVideoAssembler(VideoAssembler):
             final_path = os.path.join(use_case_folder, final_filename)
 
             if audio_path:
-                # With voiceover audio
-                self._run_ffmpeg([
+                # With voiceover audio — need to re-encode since subtitles were burned
+                video_codec = "copy" if not subtitle_ass_path else "libx264"
+                cmd = [
                     self.ffmpeg_path,
                     "-y",
                     "-i", paced_path,
                     "-i", audio_path,
-                    "-c:v", "libx264",
-                    "-preset", quality_preset["preset"],
-                    "-crf", str(quality_preset["crf"]),
+                    "-c:v", video_codec,
+                ]
+                if video_codec == "libx264":
+                    cmd.extend([
+                        "-preset", quality_preset["preset"],
+                        "-crf", str(quality_preset["crf"]),
+                    ])
+                cmd.extend([
                     "-c:a", "aac",
                     "-b:a", "192k",
                     "-shortest",
                     "-movflags", "+faststart",
                     final_path
                 ])
+                self._run_ffmpeg(cmd)
             else:
-                # Video only (no voiceover)
-                self._run_ffmpeg([
+                # Video only
+                video_codec = "copy" if not subtitle_ass_path else "libx264"
+                cmd = [
                     self.ffmpeg_path,
                     "-y",
                     "-i", paced_path,
-                    "-c:v", "libx264",
-                    "-preset", quality_preset["preset"],
-                    "-crf", str(quality_preset["crf"]),
-                    "-an",  # No audio
+                    "-c:v", video_codec,
+                ]
+                if video_codec == "libx264":
+                    cmd.extend([
+                        "-preset", quality_preset["preset"],
+                        "-crf", str(quality_preset["crf"]),
+                    ])
+                cmd.extend([
+                    "-an",
                     "-movflags", "+faststart",
                     final_path
                 ])
+                self._run_ffmpeg(cmd)
 
             rel_path = os.path.relpath(final_path, self.upload_folder)
             thumbnail_rel = self._generate_thumbnail(final_path, use_case.id)
@@ -215,6 +270,7 @@ class SmartVideoAssembler(VideoAssembler):
 
             final_video = FinalVideo(
                 use_case_id=use_case.id,
+                brand_id=use_case.brand_id,
                 script_id=script.id if script else None,
                 file_path=rel_path,
                 thumbnail_path=thumbnail_rel,
@@ -230,6 +286,7 @@ class SmartVideoAssembler(VideoAssembler):
                     "transition_duration": transition_duration,
                     "video_duration": video_duration,
                     "audio_duration": audio_duration,
+                    "subtitle_style": subtitle_style,
                     "strategy": strategy,
                     "clips_used": len(selected_clips),
                     "clips_available": len(clips),
@@ -413,6 +470,7 @@ class SmartVideoAssembler(VideoAssembler):
             "-r", "30",
             "-an",
             "-c:v", "libx264",
+            "-threads", "1",
             "-preset", quality_preset["preset"],
             "-crf", str(quality_preset["crf"]),
             output

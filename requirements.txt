@@ -44,3 +44,6 @@ click==8.1.7
 # Async Task Processing (Celery + Redis)
 celery[redis]==5.3.6
 redis==5.0.1
+
+# Email (SendGrid)
+sendgrid==6.11.0

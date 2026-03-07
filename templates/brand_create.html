@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Create Brand - Product Video Generator{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <h2 class="mb-4"><i class="bi bi-plus-circle me-2"></i>Create a New Brand</h2>
+
+            {% if error %}
+            <div class="alert alert-danger">{{ error }}</div>
+            {% endif %}
+
+            <form id="createBrandForm">
+                <div class="mb-3">
+                    <label for="brandName" class="form-label">Brand Name</label>
+                    <input type="text" class="form-control" id="brandName" name="name" required
+                           placeholder="e.g., My Company" maxlength="150">
+                    <div class="form-text">This will be used as the workspace name for your team.</div>
+                </div>
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-check-circle me-2"></i>Create Brand
+                </button>
+                <a href="{{ url_for('brand.select_brand') }}" class="btn btn-outline-secondary ms-2">Cancel</a>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('createBrandForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const name = document.getElementById('brandName').value.trim();
+    if (!name) return;
+
+    const csrfToken = document.querySelector('input[name="csrf_token"]')?.value || '';
+    fetch('/brand/create', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken},
+        body: JSON.stringify({name: name})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            window.location.href = '/';
+        } else {
+            alert(data.error || 'Failed to create brand');
+        }
+    })
+    .catch(err => alert('Error: ' + err.message));
+});
+</script>
+{% endblock %}

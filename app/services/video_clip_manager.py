@@ -508,9 +508,10 @@ class VideoClipManager:
             recommended = self.pollo_client.get_models_for_style(use_case.style or 'realistic')
             model = recommended[0] if recommended else 'pollo-1.6'
         
-        # Create clip record
+        # Create clip record (inherit brand from use case)
         clip = VideoClip(
             use_case_id=use_case_id,
+            brand_id=use_case.brand_id,
             sequence_order=sequence_order,
             prompt=prompt,
             model_used=model,
@@ -757,6 +758,9 @@ class VideoClipManager:
                 dirty = True
 
             video_url = self.pollo_client._extract_video_url(status_result.get('result'))
+            if video_url and not clip.pollo_video_url:
+                clip.pollo_video_url = video_url
+                dirty = True
             if video_url and not clip.file_path:
                 if self._download_clip_video(clip, video_url):
                     dirty = True
@@ -847,11 +851,15 @@ class VideoClipManager:
                     if sync_result.get('dirty'):
                         dirty = True
                 else:
-                    # No pollo_job_id but clip is generating/pending
-                    # Reset to pending so the user can retry via "Generate More"
-                    if clip.status in ('generating', 'pending'):
-                        self._log_warning('Clip has no Pollo job ID - resetting to error for retry',
-                                         clip_id=clip.id)
+                    # No pollo_job_id but clip is generating/pending.
+                    # Give the Celery worker a grace period (60s) to finish
+                    # calling Pollo and setting the job ID before marking as error.
+                    grace_period = timedelta(seconds=60)
+                    clip_age = datetime.utcnow() - clip.created_at if clip.created_at else timedelta(seconds=0)
+                    if clip.status in ('generating', 'pending') and clip_age > grace_period:
+                        self._log_warning('Clip has no Pollo job ID after grace period - resetting to error for retry',
+                                         clip_id=clip.id,
+                                         clip_age_seconds=clip_age.total_seconds())
                         clip.status = 'error'
                         clip.error_message = 'Generation job was not created. Click retry to try again.'
                         dirty = True
@@ -861,6 +869,10 @@ class VideoClipManager:
                             'pollo_status': 'missing_job_id',
                             'dirty': True
                         }
+                    elif clip.status in ('generating', 'pending'):
+                        self._log_info('Clip has no Pollo job ID yet - still within grace period',
+                                      clip_id=clip.id,
+                                      clip_age_seconds=clip_age.total_seconds())
 
         if dirty:
             db.session.commit()

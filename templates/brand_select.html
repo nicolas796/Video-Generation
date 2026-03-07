@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Select Brand - Product Video Generator{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <h2 class="mb-4"><i class="bi bi-building me-2"></i>Select a Brand</h2>
+            <p class="text-muted mb-4">Choose a brand workspace to continue, or create a new one.</p>
+
+            {% if brands %}
+            <div class="row g-3 mb-4">
+                {% for brand in brands %}
+                <div class="col-md-6">
+                    <div class="card h-100 border-0 shadow-sm brand-card" style="cursor: pointer;" onclick="switchBrand({{ brand.id }})">
+                        <div class="card-body">
+                            <h5 class="card-title"><i class="bi bi-building me-2"></i>{{ brand.name }}</h5>
+                            <p class="card-text text-muted small">Created {{ brand.created_at.strftime('%b %d, %Y') if brand.created_at else 'recently' }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle me-2"></i>
+                You don't belong to any brand yet. Create one to get started.
+            </div>
+            {% endif %}
+
+            <a href="{{ url_for('brand.create_brand') }}" class="btn btn-primary">
+                <i class="bi bi-plus-circle me-2"></i>Create New Brand
+            </a>
+        </div>
+    </div>
+</div>
+
+<script>
+function switchBrand(brandId) {
+    const csrfToken = document.querySelector('input[name="csrf_token"]')?.value || '';
+    fetch(`/brand/switch/${brandId}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrfToken}
+    })
+    .then(r => r.json())
+    .then(() => window.location.href = '/');
+}
+</script>
+{% endblock %}
