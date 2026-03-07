@@ -28,7 +28,7 @@ from app.services.pipeline_progress import PipelineProgressTracker, PipelineReco
 from app.services.hook_generator import HOOK_TEMPLATES, build_hook_product_payload
 from app.services.hook_image_generator import HookImageGenerator
 
-from app.tasks.hook_tasks import generate_hook_variants
+from app.tasks.hook_tasks import queue_hook_generation, run_hook_generation_blocking
 
 from app.utils.clip_assets import download_clip_assets
 
@@ -1126,10 +1126,21 @@ def create_or_update_hook(use_case_id):
     hook.error_message = None
     db.session.commit()
 
-    task = generate_hook_variants.apply_async(kwargs={'hook_id': hook.id})
-    hook_payload = hook.to_dict()
+    task_id = queue_hook_generation(hook.id)
+    if task_id:
+        hook_payload = hook.to_dict()
+        return jsonify({'success': True, 'hook': hook_payload, 'task_id': task_id}), 202
 
-    return jsonify({'success': True, 'hook': hook_payload, 'task_id': task.id}), 202
+    # Fallback to synchronous generation if the background queue is unavailable
+    try:
+        run_hook_generation_blocking(hook.id)
+        db.session.refresh(hook)
+    except Exception as exc:
+        current_app.logger.exception('Synchronous hook generation failed for hook %s', hook.id)
+        return jsonify({'success': False, 'error': f'Hook generation failed: {exc}'}), 500
+
+    hook_payload = hook.to_dict()
+    return jsonify({'success': True, 'hook': hook_payload, 'task_id': None}), 200
 
 
 @main_bp.route('/api/hooks/<int:hook_id>/generate-previews', methods=['POST'])
