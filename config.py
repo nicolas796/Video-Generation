@@ -117,6 +117,7 @@ class Config:
         or os.getenv('EXTERNAL_BASE_URL')
         or 'http://localhost:5000'
     )
+    INVITATION_LINK_USE_APP_BASE_URL = os.getenv('INVITATION_LINK_USE_APP_BASE_URL', 'false')
     
     # Celery / Redis Configuration
     # Flask only exposes UPPERCASE config keys in app.config

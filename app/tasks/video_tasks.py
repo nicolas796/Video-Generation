@@ -443,11 +443,26 @@ def generate_clips_batch_async(
                     use_case_id=use_case_id,
                     sequence_order=clip_index,
                     prompt=config['prompt'],
+                    model=config.get('model_choice'),
+                    generation_strategy=config.get('generation_strategy', 'composite_then_kling'),
+                    asset_source=config.get('asset_source', 'product_image'),
+                    script_segment_ref=config.get('script_segment', ''),
+                    analysis_metadata={
+                        'clip_type': config.get('clip_type'),
+                        'generation_strategy': config.get('generation_strategy', 'composite_then_kling'),
+                        'script_segment': config.get('script_segment', ''),
+                        'storyboard_source': 'phase1_router'
+                    },
                     length=5
                 )
                 
                 # Start generation
-                result = manager.start_generation(clip.id, image_url=selected_image_url)
+                use_image = bool(config.get('use_image', True))
+                result = manager.start_generation(
+                    clip.id,
+                    image_url=(config.get('image_url') or selected_image_url) if use_image else None,
+                    allow_auto_image=use_image
+                )
                 
                 if result.get('success'):
                     results.append({

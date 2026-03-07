@@ -44,6 +44,34 @@ def _verify_celery_connectivity(app):
             if backend_connection:
                 backend_connection.release()
 
+
+
+def _ensure_runtime_schema(app):
+    """Best-effort runtime schema guard for critical columns on Postgres."""
+    try:
+        if db.engine.dialect.name != 'postgresql':
+            return
+
+        statements = [
+            "ALTER TABLE use_cases ADD COLUMN IF NOT EXISTS generation_mode VARCHAR(50)",
+            "ALTER TABLE use_cases ADD COLUMN IF NOT EXISTS clip_strategy_overrides JSON",
+            "UPDATE use_cases SET generation_mode = 'balanced' WHERE generation_mode IS NULL",
+            "UPDATE use_cases SET clip_strategy_overrides = '{}'::json WHERE clip_strategy_overrides IS NULL",
+            "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS generation_strategy VARCHAR(50)",
+            "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS asset_source VARCHAR(50)",
+            "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS script_segment_ref TEXT",
+            "ALTER TABLE video_clips ADD COLUMN IF NOT EXISTS quality_score DOUBLE PRECISION",
+            "UPDATE video_clips SET generation_strategy = 'composite_then_kling' WHERE generation_strategy IS NULL",
+            "UPDATE video_clips SET asset_source = 'product_image' WHERE asset_source IS NULL",
+        ]
+        for stmt in statements:
+            db.session.execute(db.text(stmt))
+        db.session.commit()
+        app.logger.info('Runtime schema guard completed successfully')
+    except Exception as exc:
+        db.session.rollback()
+        app.logger.warning(f'Runtime schema guard skipped/failed: {exc}')
+
 def _init_celery(app):
     """Initialize Celery and disable it cleanly if configuration is missing."""
     app.config.setdefault('CELERY_AVAILABLE', False)
@@ -111,6 +139,8 @@ def create_app(config_name='default'):
             os.makedirs(folder, exist_ok=True)
             app.logger.info(f"Ensured directory exists: {folder}")
         
+        _ensure_runtime_schema(app)
+
         # Create default admin user if configured (skip during build phase)
         # Skip if RENDER environment variable is set but database is not ready
         if not os.getenv('RENDER') or os.getenv('DATABASE_URL'):
