@@ -29,6 +29,7 @@ from app.services.hook_generator import HOOK_TEMPLATES, build_hook_product_paylo
 from app.services.hook_image_generator import HookImageGenerator
 
 from app.tasks.hook_tasks import queue_hook_generation, run_hook_generation_blocking
+from app.tasks import thread_runner
 
 from app.utils.clip_assets import download_clip_assets
 
@@ -218,6 +219,100 @@ def _upload_url(relative_path: Optional[str]) -> Optional[str]:
     if not relative_path:
         return None
     return f"/uploads/{relative_path.replace(os.sep, '/')}"
+
+
+
+def _queue_hook_preview_generation(hook_id: int) -> Optional[str]:
+    flask_app = current_app._get_current_object()
+    try:
+        return thread_runner.submit(_hook_preview_worker, flask_app, hook_id)
+    except Exception as exc:
+        current_app.logger.exception('Unable to queue hook preview generation for hook %s', hook_id)
+        hook = db.session.get(Hook, hook_id)
+        if hook:
+            hook.status = 'failed'
+            hook.error_message = f'Failed to queue preview generation: {exc}'
+            db.session.commit()
+        return None
+
+
+def _run_hook_preview_generation_blocking(hook_id: int) -> Dict[str, Any]:
+    flask_app = current_app._get_current_object()
+    return _execute_hook_preview_generation(flask_app, hook_id, ctx=None)
+
+
+def _hook_preview_worker(ctx: thread_runner.TaskContext, flask_app, hook_id: int) -> Dict[str, Any]:
+    return _execute_hook_preview_generation(flask_app, hook_id, ctx)
+
+
+def _execute_hook_preview_generation(flask_app, hook_id: int, ctx: Optional[thread_runner.TaskContext] = None) -> Dict[str, Any]:
+    with flask_app.app_context():
+        hook = db.session.get(Hook, hook_id)
+        if not hook:
+            return {'success': False, 'error': 'Hook not found', 'hook_id': hook_id}
+
+        use_case = db.session.get(UseCase, hook.use_case_id)
+        product = db.session.get(Product, use_case.product_id) if use_case else None
+        if not use_case or not product:
+            hook.status = 'failed'
+            hook.error_message = 'Use case or product missing for preview generation.'
+            db.session.commit()
+            return {'success': False, 'error': 'Use case or product missing', 'hook_id': hook_id}
+
+        if not hook.variants:
+            hook.status = 'failed'
+            hook.error_message = 'No hook variants available. Generate hooks first.'
+            db.session.commit()
+            return {'success': False, 'error': 'No hook variants available', 'hook_id': hook_id}
+
+        hook_folder = _ensure_clean_hook_folder(hook_id)
+        product_payload = build_hook_product_payload(product, use_case)
+        generator = HookImageGenerator(api_key=current_app.config.get('FLUX_API_KEY'))
+
+        try:
+            if ctx:
+                ctx.update_state(status='STARTED', progress=5, message='Generating preview images', hook_id=hook_id)
+            image_paths = generator.generate_preview_images(product_payload, hook.variants, hook_folder)
+            if ctx:
+                ctx.update_state(status='RUNNING', progress=60, message='Rendering preview audio', hook_id=hook_id)
+            audio_info = _generate_hook_audio_manifest(
+                hook.variants,
+                hook_id,
+                hook_folder,
+                use_case.voice_id,
+                use_case.voice_settings
+            )
+
+            hook.image_paths = image_paths
+            hook.audio_path = audio_info.get('manifest_path')
+            hook.status = 'preview_ready'
+            hook.error_message = None
+            db.session.commit()
+
+            result = {
+                'success': True,
+                'hook_id': hook_id,
+                'status': hook.status,
+                'image_paths': image_paths,
+                'audio_manifest_path': hook.audio_path,
+                'audio_manifest': audio_info.get('manifest')
+            }
+
+            if ctx:
+                ctx.update_state(status='SUCCESS', progress=100, message='Hook previews ready', hook_id=hook_id)
+            return result
+        except Exception as exc:
+            db.session.rollback()
+            hook = db.session.get(Hook, hook_id)
+            if hook:
+                hook.status = 'failed'
+                hook.error_message = f'Preview generation failed: {exc}'
+                db.session.commit()
+            if ctx:
+                ctx.update_state(status='FAILURE', progress=0, message=str(exc), hook_id=hook_id)
+            raise
+        finally:
+            db.session.remove()
 
 
 def _create_silent_audio(output_path: str, duration: float = 4.0) -> None:
@@ -978,6 +1073,9 @@ def create_use_case(product_id):
     """Create a new use case for a product."""
     product = Product.query.get_or_404(product_id)
     data = request.get_json()
+    generation_mode = (data.get('generation_mode') or 'balanced').strip().lower().replace(' ', '_')
+    if generation_mode not in {'balanced', 'product_accuracy', 'creative_storytelling'}:
+        generation_mode = 'balanced'
 
     use_case = UseCase(
         product_id=product_id,
@@ -1146,42 +1244,48 @@ def create_or_update_hook(use_case_id):
 @main_bp.route('/api/hooks/<int:hook_id>/generate-previews', methods=['POST'])
 @login_required
 def generate_hook_previews(hook_id):
-    """Generate static preview assets (images + audio) for a hook."""
+    """Kick off async preview generation (images + audio) for a hook."""
     hook = Hook.query.get_or_404(hook_id)
-    use_case = UseCase.query.get_or_404(hook.use_case_id)
-    product = Product.query.get_or_404(use_case.product_id)
 
     if not hook.variants:
         return jsonify({'success': False, 'error': 'No hook variants available. Generate hooks first.'}), 400
 
-    hook_folder = _ensure_clean_hook_folder(hook_id)
-    product_payload = build_hook_product_payload(product, use_case)
+    if (hook.status or '').lower() == 'preview_generating':
+        return jsonify({'success': False, 'error': 'Preview generation already running.'}), 409
 
-    try:
-        image_generator = HookImageGenerator(api_key=current_app.config.get('FLUX_API_KEY'))
-        image_paths = image_generator.generate_preview_images(product_payload, hook.variants, hook_folder)
-    except Exception as exc:
-        current_app.logger.exception('Hook preview image generation failed for hook %s', hook_id)
-        hook.status = 'failed'
-        hook.error_message = f'Image generation failed: {exc}'
-        db.session.commit()
-        return jsonify({'success': False, 'error': f'Image generation failed: {exc}'}), 500
-
-    audio_info = _generate_hook_audio_manifest(
-        hook.variants,
-        hook_id,
-        hook_folder,
-        use_case.voice_id,
-        use_case.voice_settings
-    )
-
-    hook.image_paths = image_paths
-    hook.audio_path = audio_info.get('manifest_path')
-    hook.status = 'preview_ready'
+    hook.image_paths = []
+    hook.audio_path = None
+    hook.video_path = None
+    hook.winning_variant_index = None
+    hook.status = 'preview_generating'
     hook.error_message = None
     db.session.commit()
 
-    audio_manifest = {key: _upload_url(value) for key, value in (audio_info.get('manifest') or {}).items()}
+    task_id = _queue_hook_preview_generation(hook.id)
+    if task_id:
+        return jsonify({
+            'success': True,
+            'hook_id': hook.id,
+            'status': hook.status,
+            'task_id': task_id,
+            'message': 'Preview generation queued. This may take up to a minute.',
+            'hook': hook.to_dict()
+        }), 202
+
+    # Background worker unavailable; fall back to blocking execution
+    hook.status = 'preview_generating'
+    hook.error_message = None
+    db.session.commit()
+
+    try:
+        result = _run_hook_preview_generation_blocking(hook.id)
+        hook = Hook.query.get_or_404(hook_id)
+    except Exception as exc:
+        current_app.logger.exception('Hook preview generation failed for hook %s', hook_id)
+        return jsonify({'success': False, 'error': f'Preview generation failed: {exc}'}), 500
+
+    image_paths = result.get('image_paths') or []
+    audio_manifest = {key: _upload_url(value) for key, value in (result.get('audio_manifest') or {}).items()}
 
     return jsonify({
         'success': True,

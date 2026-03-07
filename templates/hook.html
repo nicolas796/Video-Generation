@@ -516,6 +516,7 @@ const animateProgressBar = document.getElementById('animateProgressBar');
 const statusMeta = {
     draft: { label: 'Draft', message: 'Concept ready – generate previews', chip: 'status-pending', badge: 'badge bg-secondary text-white', step: 'choose' },
     generating: { label: 'Generating', message: 'Hook concepts are being crafted...', chip: 'status-running', badge: 'badge bg-info text-dark', step: 'choose' },
+    preview_generating: { label: 'Rendering Previews', message: 'Synthesizing images and voice previews...', chip: 'status-running', badge: 'badge bg-info text-dark', step: 'preview' },
     preview_ready: { label: 'Previews Ready', message: 'Variants are ready to review', chip: 'status-ready', badge: 'badge bg-success text-white', step: 'preview' },
     ready_for_animation: { label: 'Variant Locked', message: 'Animate the winning hook when ready', chip: 'status-ready', badge: 'badge bg-primary text-white', step: 'animate' },
     animating: { label: 'Animating', message: 'Motion preview rendering in the background', chip: 'status-running', badge: 'badge bg-warning text-dark', step: 'animate' },
@@ -661,6 +662,7 @@ async function generatePreviews() {
     setPreviewStatus('running', 'Generating previews...');
     setLoading(true, 'Generating previews...', { overlay: true });
     showVariantSkeletons();
+    let awaitingBackground = false;
     try {
         const response = await fetch(`/api/hooks/${currentHookId}/generate-previews`, {
             method: 'POST',
@@ -670,26 +672,51 @@ async function generatePreviews() {
         if (!response.ok || !data.success) {
             throw new Error(data.error || 'Failed to generate previews');
         }
-        const hookPayload = {
-            id: currentHookId,
-            hook_type: selectedHookType,
-            variants: data.variants,
-            image_urls: data.image_urls,
-            audio_manifest: data.audio_manifest,
-            status: data.status || 'preview_ready',
-            winning_variant_index: null
-        };
+        const hasImmediateAssets = Array.isArray(data.image_urls) && data.image_urls.length;
         selectedVariantIndex = null;
         hookReadyForScript = false;
-        applyHookState(hookPayload);
-        showAlert('success', 'Previews ready. Review your variants.');
+        if (hasImmediateAssets) {
+            const hookPayload = {
+                id: currentHookId,
+                hook_type: selectedHookType,
+                variants: data.variants,
+                image_urls: data.image_urls,
+                audio_manifest: data.audio_manifest,
+                status: data.status || 'preview_ready',
+                winning_variant_index: null
+            };
+            applyHookState(hookPayload);
+            showAlert('success', 'Previews ready. Review your variants.');
+        } else {
+            awaitingBackground = true;
+            const hookPayload = data.hook || {
+                id: currentHookId,
+                hook_type: selectedHookType,
+                variants,
+                image_urls: [],
+                audio_manifest: {},
+                status: data.status || 'preview_generating',
+                winning_variant_index: null
+            };
+            if (!hookPayload.variants || !hookPayload.variants.length) {
+                hookPayload.variants = variants;
+            }
+            hookPayload.image_urls = [];
+            hookPayload.audio_manifest = {};
+            applyHookState(hookPayload);
+            showAlert('info', data.message || "Preview generation queued. We'll refresh automatically.");
+            startStatusPolling();
+        }
     } catch (error) {
+        previewGenerationInFlight = false;
         setPreviewStatus('error', error.message || 'Preview generation failed');
         showAlert('danger', error.message || 'Preview generation failed');
     } finally {
-        hideVariantSkeletons();
         setLoading(false, null, { overlay: true });
-        previewGenerationInFlight = false;
+        if (!awaitingBackground) {
+            hideVariantSkeletons();
+            previewGenerationInFlight = false;
+        }
     }
 }
 
@@ -795,14 +822,22 @@ function applyHookState(hook, options = {}) {
     if (Number.isInteger(hook.winning_variant_index)) {
         selectedVariantIndex = hook.winning_variant_index;
         hookReadyForScript = true;
+    } else if (hook.winning_variant_index === null || typeof hook.winning_variant_index === 'undefined') {
+        selectedVariantIndex = null;
+        hookReadyForScript = false;
     }
     updateHookSelectionUI();
-    updateVariantsVisibility(Boolean(variants.length));
-    if (variants.length) {
-        renderVariants();
-    }
     const status = (hook.status || '').toLowerCase();
     currentHookStatus = status;
+    if (status === 'preview_generating') {
+        previewGenerationInFlight = true;
+    } else if (previewGenerationInFlight) {
+        previewGenerationInFlight = false;
+    }
+    updateVariantsVisibility(Boolean(variants.length));
+    if (variants.length && status !== 'preview_generating') {
+        renderVariants();
+    }
     updateStatusSummary(status, hook.error_message);
     updateProgressByStatus(status);
     updateAnimateUI(hook);
@@ -855,6 +890,11 @@ function updateHookSelectionUI() {
 function updateVariantsVisibility(hasVariants) {
     if (!previewSection) return;
     previewSection.style.display = 'block';
+    if (currentHookStatus === 'preview_generating') {
+        variantsEmptyState.classList.add('d-none');
+        showVariantSkeletons();
+        return;
+    }
     if (hasVariants) {
         hideVariantSkeletons();
         variantsEmptyState.classList.add('d-none');
@@ -973,6 +1013,10 @@ function updateStatusSummary(status, errorMessage) {
     }
     if (status === 'generating') {
         setPreviewStatus('running', 'Generating hook concepts...');
+    } else if (status === 'preview_generating') {
+        setPreviewStatus('running', 'Rendering previews...');
+    } else if (status === 'failed') {
+        setPreviewStatus('error', 'Preview generation failed');
     } else if (!variants.length && status === 'draft') {
         setPreviewStatus('pending', 'Generate previews to continue');
     } else if (variants.length) {
@@ -1008,7 +1052,7 @@ function updateActionButtons() {
     const status = ((latestHookState && latestHookState.status) || '').toLowerCase();
     const isAnimating = status === 'animating';
     const isHookGenerating = status === 'generating';
-    const disableGenerate = isGenerating || isHookGenerating;
+    const disableGenerate = isGenerating || isHookGenerating || previewGenerationInFlight;
     const hasVariants = Array.isArray(variants) && variants.length > 0;
     if (generateBtn) {
         generateBtn.disabled = disableGenerate;
