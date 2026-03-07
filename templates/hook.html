@@ -254,6 +254,45 @@
     .auto-redirect-alert button {
         font-size: 0.75rem;
     }
+    .preview-progress-panel {
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 1rem;
+        background: #f8fafc;
+        margin-bottom: 1rem;
+    }
+    .preview-progress-panel .progress {
+        height: 6px;
+        background: #e2e8f0;
+    }
+    .preview-asset-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+    }
+    .asset-row {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+    .asset-chip-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+    }
+    .asset-chip {
+        border-radius: 999px;
+        padding: 0.15rem 0.65rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .asset-ready { background: #dcfce7; color: #15803d; }
+    .asset-running { background: #fef3c7; color: #a16207; }
+    .asset-pending { background: #e2e8f0; color: #475569; }
+    .asset-error { background: #fee2e2; color: #b91c1c; }
+    .preview-progress-panel[data-hidden="true"] {
+        display: none;
+    }
     @media (max-width: 576px) {
         .hook-header {
             flex-direction: column;
@@ -371,6 +410,16 @@
                     <p class="text-muted mb-0">Listen, view, and choose the hook that feels strongest.</p>
                 </div>
                 <div class="status-chip status-pending" id="previewStatus">Waiting for previews...</div>
+            </div>
+            <div id="previewProgressPanel" class="preview-progress-panel" data-hidden="true" aria-live="polite">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <strong id="previewProgressMessage">Preparing previews...</strong>
+                    <span id="previewProgressValue">0%</span>
+                </div>
+                <div class="progress mb-2" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                    <div class="progress-bar" id="previewProgressBar" style="width:0%;"></div>
+                </div>
+                <div class="preview-asset-list" id="previewAssetList"></div>
             </div>
             <div id="variantsEmptyState" class="text-center text-muted py-4 d-none">
                 <div class="mb-2"><i class="bi bi-images" style="font-size:2rem;"></i></div>
@@ -493,6 +542,11 @@ const previewSection = document.getElementById('previewSection');
 const variantsGrid = document.getElementById('variantsGrid');
 const variantsEmptyState = document.getElementById('variantsEmptyState');
 const previewStatus = document.getElementById('previewStatus');
+const previewProgressPanel = document.getElementById('previewProgressPanel');
+const previewProgressBar = document.getElementById('previewProgressBar');
+const previewProgressValue = document.getElementById('previewProgressValue');
+const previewProgressMessage = document.getElementById('previewProgressMessage');
+const previewAssetList = document.getElementById('previewAssetList');
 const animateBtn = document.getElementById('animateBtn');
 const animateStatus = document.getElementById('animateStatus');
 const refreshBtn = document.getElementById('refreshStatusBtn');
@@ -685,6 +739,7 @@ async function generatePreviews() {
                 status: data.status || 'preview_ready',
                 winning_variant_index: null
             };
+            applyPreviewMeta(hookPayload, data);
             applyHookState(hookPayload);
             showAlert('success', 'Previews ready. Review your variants.');
         } else {
@@ -698,6 +753,7 @@ async function generatePreviews() {
                 status: data.status || 'preview_generating',
                 winning_variant_index: null
             };
+            applyPreviewMeta(hookPayload, data);
             if (!hookPayload.variants || !hookPayload.variants.length) {
                 hookPayload.variants = variants;
             }
@@ -838,7 +894,8 @@ function applyHookState(hook, options = {}) {
     if (variants.length && status !== 'preview_generating') {
         renderVariants();
     }
-    updateStatusSummary(status, hook.error_message);
+    updateStatusSummary(status, hook.error_message, hook);
+    updatePreviewProgressUI(hook);
     updateProgressByStatus(status);
     updateAnimateUI(hook);
     updateNextStepUI();
@@ -988,6 +1045,88 @@ function setPreviewStatus(state, text) {
     previewStatus.innerText = text;
 }
 
+function updatePreviewProgressUI(hook = {}) {
+    if (!previewProgressPanel) return;
+    const latestStatus = (hook.status || (latestHookState && latestHookState.status) || '').toLowerCase();
+    const progressValue = Number.isFinite(hook.preview_progress)
+        ? hook.preview_progress
+        : (latestHookState && Number.isFinite(latestHookState.preview_progress)
+            ? latestHookState.preview_progress
+            : null);
+    const statusMessage = hook.preview_status_message
+        || (latestHookState && latestHookState.preview_status_message)
+        || '';
+    const assetState = hook.preview_assets
+        || (latestHookState && latestHookState.preview_assets)
+        || {};
+    const shouldShow = latestStatus === 'preview_generating'
+        || (typeof progressValue === 'number' && progressValue > 0 && progressValue < 100)
+        || (latestStatus === 'preview_ready' && progressValue === 100);
+    if (!shouldShow) {
+        previewProgressPanel.dataset.hidden = 'true';
+        return;
+    }
+    previewProgressPanel.dataset.hidden = 'false';
+    const safeProgress = typeof progressValue === 'number' ? Math.min(100, Math.max(0, progressValue)) : null;
+    previewProgressValue.textContent = safeProgress === null ? '—' : `${safeProgress}%`;
+    previewProgressBar.style.width = safeProgress === null ? '0%' : `${safeProgress}%`;
+    previewProgressMessage.textContent = statusMessage || (latestStatus === 'preview_generating' ? 'Rendering previews...' : 'Preview status');
+    previewAssetList.innerHTML = buildAssetStatusRows(assetState);
+}
+
+function buildAssetStatusRows(state = {}) {
+    const chipsFor = (bucket) => {
+        const entries = Array.isArray(state[bucket]) ? state[bucket] : [];
+        if (!entries.length) {
+            return '<span class="text-muted small">Pending</span>';
+        }
+        return entries.map(entry => {
+            const status = (entry && entry.status) || 'pending';
+            const label = (entry && entry.label) || assetLabel(bucket, entry);
+            return `<span class="asset-chip ${assetChipClass(status)}">${label}</span>`;
+        }).join('');
+    };
+    const rows = ['images', 'audio'].map(bucket => {
+        const chips = chipsFor(bucket);
+        if (!chips) return '';
+        return `<div class="asset-row"><span class="asset-heading text-uppercase small">${bucket}</span><div class="asset-chip-group">${chips}</div></div>`;
+    }).filter(Boolean);
+    return rows.length ? rows.join('') : '<span class="text-muted small">Waiting for preview updates...</span>';
+}
+
+function assetChipClass(status) {
+    if (status === 'ready') return 'asset-ready';
+    if (status === 'processing') return 'asset-running';
+    if (status === 'error') return 'asset-error';
+    return 'asset-pending';
+}
+
+function assetLabel(bucket, entry) {
+    const index = entry && Number.isInteger(entry.index) ? entry.index + 1 : 1;
+    return bucket === 'images' ? `Image ${index}` : `Audio ${index}`;
+}
+
+function applyPreviewMeta(target, source = {}) {
+    if (!target || typeof target !== 'object') return target;
+    const metaSource = source.preview_progress !== undefined ? source : (source.hook || {});
+    if (metaSource && typeof metaSource.preview_progress !== 'undefined') {
+        target.preview_progress = metaSource.preview_progress;
+    } else if (typeof target.preview_progress === 'undefined') {
+        target.preview_progress = 0;
+    }
+    if (metaSource && metaSource.preview_assets) {
+        target.preview_assets = metaSource.preview_assets;
+    } else if (!target.preview_assets) {
+        target.preview_assets = {};
+    }
+    if (metaSource && metaSource.preview_status_message) {
+        target.preview_status_message = metaSource.preview_status_message;
+    } else if (!target.preview_status_message) {
+        target.preview_status_message = source.message || target.preview_status_message || '';
+    }
+    return target;
+}
+
 function setAnimateStatus(state, text) {
     if (!animateStatus) return;
     const classMap = {
@@ -1000,7 +1139,7 @@ function setAnimateStatus(state, text) {
     animateStatus.innerText = text;
 }
 
-function updateStatusSummary(status, errorMessage) {
+function updateStatusSummary(status, errorMessage, hook = {}) {
     const meta = statusMeta[status] || statusMeta.default;
     statusSummary.innerHTML = `
         <div class="d-flex flex-column gap-2">
@@ -1014,9 +1153,9 @@ function updateStatusSummary(status, errorMessage) {
     if (status === 'generating') {
         setPreviewStatus('running', 'Generating hook concepts...');
     } else if (status === 'preview_generating') {
-        setPreviewStatus('running', 'Rendering previews...');
+        setPreviewStatus('running', hook.preview_status_message || 'Rendering previews...');
     } else if (status === 'failed') {
-        setPreviewStatus('error', 'Preview generation failed');
+        setPreviewStatus('error', errorMessage || hook.preview_status_message || 'Preview generation failed');
     } else if (!variants.length && status === 'draft') {
         setPreviewStatus('pending', 'Generate previews to continue');
     } else if (variants.length) {

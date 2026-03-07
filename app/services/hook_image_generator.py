@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Callable
 
 import requests
 from flask import current_app
@@ -82,6 +82,9 @@ class HookImageGenerator:
         product_data: Dict[str, Any],
         hook_variants: List[Dict[str, Any]],
         upload_folder: str,
+        *,
+        progress_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None,
+        hook_id: Optional[int] = None,
     ) -> List[str]:
         """Generate static preview images for each hook variant.
 
@@ -89,6 +92,8 @@ class HookImageGenerator:
             product_data: Canonical representation of the product/use case.
             hook_variants: Hook variants returned by ``HookGenerator``.
             upload_folder: Absolute folder where the assets should be saved.
+            progress_callback: Optional callable for progress updates.
+            hook_id: Optional hook identifier for logging.
 
         Returns:
             List of relative paths (from the upload root) to the saved images.
@@ -100,12 +105,50 @@ class HookImageGenerator:
         os.makedirs(upload_folder, exist_ok=True)
 
         image_paths: List[str] = []
+        total = len(hook_variants)
         for index, variant in enumerate(hook_variants):
+            step_message = f"Generating image {index + 1} of {total}"
+            if hook_id:
+                LOGGER.info("Hook %s: %s", hook_id, step_message)
+            else:
+                LOGGER.info(step_message)
+            if progress_callback:
+                progress_callback('image', 'start', {
+                    'index': index,
+                    'total': total,
+                    'message': f"{step_message}..."
+                })
+
             prompt = self._build_image_prompt(product_data, variant, index)
-            image_payload = self._generate_with_flux(prompt)
-            filename = f"hook_variant_{index + 1}.png"
-            saved_path = self._save_image_payload(image_payload, upload_folder, filename)
-            image_paths.append(self._to_relative_path(saved_path))
+            try:
+                image_payload = self._generate_with_flux(prompt)
+                filename = f"hook_variant_{index + 1}.png"
+                saved_path = self._save_image_payload(image_payload, upload_folder, filename)
+                relative_path = self._to_relative_path(saved_path)
+                image_paths.append(relative_path)
+                complete_message = f"Image {index + 1} of {total} ready"
+                if hook_id:
+                    LOGGER.info("Hook %s: %s", hook_id, complete_message)
+                else:
+                    LOGGER.info(complete_message)
+                if progress_callback:
+                    progress_callback('image', 'complete', {
+                        'index': index,
+                        'total': total,
+                        'relative_path': relative_path,
+                        'message': complete_message
+                    })
+            except Exception as exc:  # pragma: no cover - network failure
+                error_message = f"Image {index + 1} of {total} failed: {exc}"
+                LOGGER.exception("Hook %s: %s", hook_id or 'preview', error_message)
+                if progress_callback:
+                    progress_callback('image', 'error', {
+                        'index': index,
+                        'total': total,
+                        'error': str(exc),
+                        'message': error_message
+                    })
+                raise
 
             if index < len(hook_variants) - 1:
                 time.sleep(self.request_delay)

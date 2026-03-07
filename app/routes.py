@@ -7,7 +7,7 @@ import json
 import shutil
 import subprocess
 from datetime import datetime
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict, List, Callable
 
 import requests
 from flask import Blueprint, render_template, jsonify, request, current_app, send_from_directory, url_for, abort
@@ -208,7 +208,6 @@ def _ensure_clean_hook_folder(hook_id: int) -> str:
 def _relative_upload_path(abs_path: str) -> str:
     if not abs_path:
         return ''
-    upload_root = _get_upload_root()
     try:
         return os.path.relpath(abs_path, upload_root)
     except ValueError:
@@ -219,6 +218,112 @@ def _upload_url(relative_path: Optional[str]) -> Optional[str]:
     if not relative_path:
         return None
     return f"/uploads/{relative_path.replace(os.sep, '/')}"
+
+
+def _build_preview_asset_entries(kind: str, count: int) -> List[Dict[str, Any]]:
+    label_prefix = 'image' if kind == 'images' else 'audio'
+    count = max(count or 0, 0)
+    entries: List[Dict[str, Any]] = []
+    for idx in range(count):
+        entries.append({
+            'index': idx,
+            'label': f"{label_prefix}_{idx + 1}",
+            'status': 'pending',
+            'path': None,
+            'error': None
+        })
+    return entries
+
+
+def _initialize_preview_tracking(hook: Hook) -> None:
+    variant_count = len(hook.variants or [])
+    hook.preview_assets = {
+        'images': _build_preview_asset_entries('images', variant_count),
+        'audio': _build_preview_asset_entries('audio', variant_count)
+    }
+    hook.preview_progress = 0
+    hook.preview_status_message = 'Queued preview generation...'
+
+
+def _calculate_preview_progress(assets: Dict[str, Any]) -> int:
+    entries: List[Dict[str, Any]] = []
+    for bucket_name in ('images', 'audio'):
+        bucket = assets.get(bucket_name) or []
+        entries.extend(bucket)
+    total = len(entries)
+    if not total:
+        return 0
+    completed = sum(1 for entry in entries if (entry or {}).get('status') == 'ready')
+    return int((completed / total) * 100)
+
+
+def _ensure_asset_entry(bucket: List[Dict[str, Any]], kind: str, index: int) -> Dict[str, Any]:
+    while len(bucket) <= index:
+        next_index = len(bucket)
+        bucket.append({
+            'index': next_index,
+            'label': f"{'image' if kind == 'images' else 'audio'}_{next_index + 1}",
+            'status': 'pending',
+            'path': None,
+            'error': None
+        })
+    return bucket[index]
+
+
+def _update_preview_tracking(hook_id: int, stage: str, event: str, payload: Optional[Dict[str, Any]] = None) -> None:
+    payload = payload or {}
+    hook = db.session.get(Hook, hook_id)
+    if not hook:
+        return
+    assets = hook.preview_assets or {}
+    bucket_name = 'images' if stage == 'image' else 'audio'
+    bucket = assets.get(bucket_name) or []
+    index = payload.get('index')
+    entry = None
+    if isinstance(index, int) and index >= 0:
+        entry = _ensure_asset_entry(bucket, bucket_name, index)
+        status = payload.get('status')
+        if event == 'start':
+            entry['status'] = 'processing'
+            entry['error'] = None
+        elif event == 'complete':
+            entry['status'] = 'ready'
+            if payload.get('relative_path'):
+                entry['path'] = payload['relative_path']
+        elif event == 'error':
+            entry['status'] = 'error'
+            entry['error'] = payload.get('error')
+        elif status:
+            entry['status'] = status
+    assets[bucket_name] = bucket
+    message = payload.get('message')
+    if message:
+        hook.preview_status_message = message
+    hook.preview_assets = assets
+    hook.preview_progress = _calculate_preview_progress(assets)
+    if stage == 'image' and event == 'complete' and isinstance(index, int) and payload.get('relative_path'):
+        image_paths = hook.image_paths or []
+        while len(image_paths) <= index:
+            image_paths.append(None)
+        image_paths[index] = payload['relative_path']
+        hook.image_paths = image_paths
+    if stage == 'image' and event == 'error':
+        hook.error_message = payload.get('error') or hook.error_message
+    db.session.commit()
+
+
+def _preview_ready_summary(assets: Optional[Dict[str, Any]]) -> Dict[str, List[str]]:
+    summary = {'images': [], 'audio': []}
+    if not assets:
+        return summary
+    for bucket_name in ('images', 'audio'):
+        bucket = assets.get(bucket_name) or []
+        for entry in bucket:
+            if (entry or {}).get('status') == 'ready':
+                summary[bucket_name].append(entry.get('label') or f"{bucket_name}_{(entry.get('index') or 0) + 1}")
+    return summary
+
+
 
 
 
@@ -256,23 +361,43 @@ def _execute_hook_preview_generation(flask_app, hook_id: int, ctx: Optional[thre
         if not use_case or not product:
             hook.status = 'failed'
             hook.error_message = 'Use case or product missing for preview generation.'
+            hook.preview_status_message = 'Use case or product missing for preview generation.'
             db.session.commit()
             return {'success': False, 'error': 'Use case or product missing', 'hook_id': hook_id}
 
         if not hook.variants:
             hook.status = 'failed'
             hook.error_message = 'No hook variants available. Generate hooks first.'
+            hook.preview_status_message = 'No hook variants available. Generate hooks first.'
             db.session.commit()
             return {'success': False, 'error': 'No hook variants available', 'hook_id': hook_id}
+
+        _initialize_preview_tracking(hook)
+        db.session.commit()
 
         hook_folder = _ensure_clean_hook_folder(hook_id)
         product_payload = build_hook_product_payload(product, use_case)
         generator = HookImageGenerator(api_key=current_app.config.get('FLUX_API_KEY'))
 
+        def _progress_callback(stage: str, event: str, payload: Optional[Dict[str, Any]] = None):
+            try:
+                _update_preview_tracking(hook_id, stage, event, payload)
+            except Exception:
+                current_app.logger.exception('Failed to persist preview progress for hook %s', hook_id)
+
         try:
+            current_app.logger.info('Hook %s: Preview generation started (variants=%s)', hook_id, len(hook.variants or []))
+            current_app.logger.info('Hook %s progress 1/3: Starting image renders', hook_id)
             if ctx:
                 ctx.update_state(status='STARTED', progress=5, message='Generating preview images', hook_id=hook_id)
-            image_paths = generator.generate_preview_images(product_payload, hook.variants, hook_folder)
+            image_paths = generator.generate_preview_images(
+                product_payload,
+                hook.variants,
+                hook_folder,
+                progress_callback=_progress_callback,
+                hook_id=hook_id
+            )
+            current_app.logger.info('Hook %s progress 2/3: Rendering audio previews', hook_id)
             if ctx:
                 ctx.update_state(status='RUNNING', progress=60, message='Rendering preview audio', hook_id=hook_id)
             audio_info = _generate_hook_audio_manifest(
@@ -280,13 +405,17 @@ def _execute_hook_preview_generation(flask_app, hook_id: int, ctx: Optional[thre
                 hook_id,
                 hook_folder,
                 use_case.voice_id,
-                use_case.voice_settings
+                use_case.voice_settings,
+                progress_callback=_progress_callback
             )
 
+            current_app.logger.info('Hook %s progress 3/3: Finalizing preview assets', hook_id)
             hook.image_paths = image_paths
             hook.audio_path = audio_info.get('manifest_path')
             hook.status = 'preview_ready'
             hook.error_message = None
+            hook.preview_progress = 100
+            hook.preview_status_message = 'Previews ready to review.'
             db.session.commit()
 
             result = {
@@ -302,11 +431,13 @@ def _execute_hook_preview_generation(flask_app, hook_id: int, ctx: Optional[thre
                 ctx.update_state(status='SUCCESS', progress=100, message='Hook previews ready', hook_id=hook_id)
             return result
         except Exception as exc:
+            current_app.logger.exception('Hook %s preview generation failed: %s', hook_id, exc)
             db.session.rollback()
             hook = db.session.get(Hook, hook_id)
             if hook:
                 hook.status = 'failed'
                 hook.error_message = f'Preview generation failed: {exc}'
+                hook.preview_status_message = f'Preview generation failed: {exc}'
                 db.session.commit()
             if ctx:
                 ctx.update_state(status='FAILURE', progress=0, message=str(exc), hook_id=hook_id)
@@ -371,25 +502,57 @@ def _generate_hook_audio_manifest(
     hook_id: int,
     hook_folder: str,
     voice_id: Optional[str],
-    voice_settings: Optional[Dict[str, Any]]
+    voice_settings: Optional[Dict[str, Any]],
+    progress_callback: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
 ) -> Dict[str, Any]:
     upload_root = _get_upload_root()
     manifest: Dict[str, str] = {}
+    total = len(variants or []) or 0
     for idx, variant in enumerate(variants or []):
-        text = (variant.get('verbal') or variant.get('on_screen') or 'Discover our latest drop!').strip()
+        text_value = (variant.get('verbal') or variant.get('on_screen') or 'Discover our latest drop!').strip()
         filename = f'hook_variant_{idx + 1}.mp3'
         output_path = os.path.join(hook_folder, filename)
-        success = _synthesize_hook_audio(text, voice_id, voice_settings, output_path)
+        step_message = f"Rendering audio {idx + 1} of {total}" if total else 'Rendering audio preview'
+        current_app.logger.info('Hook %s: %s', hook_id, step_message)
+        if progress_callback:
+            progress_callback('audio', 'start', {
+                'index': idx,
+                'total': total,
+                'message': f"{step_message}..."
+            })
+        success = False
+        try:
+            success = _synthesize_hook_audio(text_value, voice_id, voice_settings, output_path)
+        except Exception as exc:  # pragma: no cover - network failure
+            current_app.logger.exception('Hook %s: audio %s failed: %s', hook_id, idx + 1, exc)
+            if progress_callback:
+                progress_callback('audio', 'error', {
+                    'index': idx,
+                    'total': total,
+                    'error': str(exc),
+                    'message': f"Audio {idx + 1} failed"
+                })
         if not success:
             _create_silent_audio(output_path, duration=4.0)
-        manifest[str(idx)] = _relative_upload_path(output_path).replace('\\', '/')
+            current_app.logger.warning('Hook %s: audio %s fallback to silence', hook_id, idx + 1)
+        relative_path = _relative_upload_path(output_path).replace('\\', '/')
+        manifest[str(idx)] = relative_path
+        if progress_callback:
+            progress_callback('audio', 'complete', {
+                'index': idx,
+                'total': total,
+                'relative_path': relative_path,
+                'message': f"Audio {idx + 1} of {total} ready" if total else 'Audio preview ready'
+            })
     manifest_path = os.path.join(hook_folder, 'audio_manifest.json')
     with open(manifest_path, 'w', encoding='utf-8') as manifest_file:
         json.dump(manifest, manifest_file, indent=2)
+    current_app.logger.info('Hook %s: Audio manifest written', hook_id)
     return {
         'manifest_path': _relative_upload_path(manifest_path),
         'manifest': manifest
     }
+
 
 
 def _load_audio_manifest(relative_path: Optional[str]) -> Dict[str, str]:
@@ -1259,6 +1422,7 @@ def generate_hook_previews(hook_id):
     hook.winning_variant_index = None
     hook.status = 'preview_generating'
     hook.error_message = None
+    _initialize_preview_tracking(hook)
     db.session.commit()
 
     task_id = _queue_hook_preview_generation(hook.id)
@@ -1269,12 +1433,14 @@ def generate_hook_previews(hook_id):
             'status': hook.status,
             'task_id': task_id,
             'message': 'Preview generation queued. This may take up to a minute.',
-            'hook': hook.to_dict()
+            'hook': hook.to_dict(),
+            'preview_ready_assets': _preview_ready_summary(hook.preview_assets)
         }), 202
 
     # Background worker unavailable; fall back to blocking execution
     hook.status = 'preview_generating'
     hook.error_message = None
+    _initialize_preview_tracking(hook)
     db.session.commit()
 
     try:
@@ -1295,7 +1461,9 @@ def generate_hook_previews(hook_id):
         'image_paths': image_paths,
         'image_urls': [_upload_url(path) for path in image_paths],
         'audio_manifest_path': hook.audio_path,
-        'audio_manifest': audio_manifest
+        'audio_manifest': audio_manifest,
+        'hook': hook.to_dict(),
+        'preview_ready_assets': _preview_ready_summary(hook.preview_assets)
     })
 
 
@@ -1401,6 +1569,7 @@ def get_hook_status(hook_id):
     response['audio_manifest'] = {key: _upload_url(value) for key, value in (audio_manifest or {}).items()}
     response['audio_manifest_path'] = hook.audio_path
     response['video_url'] = _upload_url(hook.video_path)
+    response['preview_ready_assets'] = _preview_ready_summary(response.get('preview_assets'))
     return jsonify({'success': True, 'hook': response})
 
 

@@ -582,6 +582,10 @@ class Hook(db.Model):
 
     status = db.Column(db.String(20), default='draft')
     error_message = db.Column(db.Text)
+    preview_progress = db.Column(db.Integer, default=0)
+    preview_assets = db.Column(db.JSON, default=dict)
+    preview_status_message = db.Column(db.String(255))
+
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -603,6 +607,9 @@ class Hook(db.Model):
             'video_path': self.video_path,
             'status': self.status,
             'error_message': self.error_message,
+            'preview_progress': self.preview_progress or 0,
+            'preview_assets': self.preview_assets or {},
+            'preview_status_message': self.preview_status_message,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
