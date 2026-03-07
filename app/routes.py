@@ -1128,7 +1128,7 @@ def create_or_update_hook(use_case_id):
 
     hook = Hook.query.filter_by(use_case_id=use_case_id).first()
     if not hook:
-        hook = Hook(use_case_id=use_case_id)
+        hook = Hook(use_case_id=use_case_id, hook_type=hook_type)
         db.session.add(hook)
         db.session.flush()
     else:
