@@ -611,7 +611,8 @@ class HookImageGenerator:
         for idx, url in enumerate(targets, start=1):
             has_more = idx < len(targets)
             try:
-                params = {"id": task_id} if task_id else None
+                # Only add id param if URL doesn't already have it (FLUX polling_url includes ?id=)
+                params = {"id": task_id} if task_id and "?id=" not in url and "&id=" not in url else None
                 response = self.session.get(url, headers=headers, params=params, timeout=max(30.0, self.poll_interval * 4))
                 if response.status_code >= 400:
                     error: ExternalAPIError
