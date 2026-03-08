@@ -247,12 +247,12 @@ class HookImageGenerator:
     def _perform_flux_request(self, *, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}/{endpoint}"
         headers = self._build_headers()
-        response = self.session.post(url, headers=headers, json=payload, timeout=120)
+        response = self.session.post(url, headers=headers, json=payload, timeout=30)
         if response.status_code >= 400:
             raise self._build_flux_error(response)
         return self._safe_json(response)
 
-    def _poll_flux_task(self, task_id: str, *, timeout: int = 120, interval: float = 2.0) -> Dict[str, Any]:
+    def _poll_flux_task(self, task_id: str, *, timeout: int = 30, interval: float = 2.0) -> Dict[str, Any]:
         start = time.time()
         poll_paths = [
             f"tasks/{task_id}",
@@ -354,7 +354,7 @@ class HookImageGenerator:
     def _download_image(self, url: str, folder: str, filename: str) -> str:
         os.makedirs(folder, exist_ok=True)
         output_path = os.path.join(folder, filename)
-        response = self.session.get(url, timeout=120)
+        response = self.session.get(url, timeout=30)
         response.raise_for_status()
         with open(output_path, "wb") as handle:
             handle.write(response.content)
