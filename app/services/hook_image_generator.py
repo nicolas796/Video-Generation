@@ -490,7 +490,7 @@ class HookImageGenerator:
 
             task_id = self._extract_task_id(response_payload)
             polling_url = self._extract_polling_url(response_payload)
-            LOGGER.info("FLUX create response pending task_id=%s polling_url=%s webhook_enabled=%s", task_id, polling_url, bool(self.webhook_url))
+            LOGGER.info("FLUX create response pending task_id=%s polling_url=%s webhook_enabled=%s response_keys=%s", task_id, polling_url, bool(self.webhook_url), list(response_payload.keys()))
             if not task_id and not polling_url:
                 raise ExternalAPIError(
                     "FLUX",
