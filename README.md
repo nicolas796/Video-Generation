@@ -208,3 +208,4 @@ Smoke tests cover the Flask blueprint wiring, CRUD flows, and pipeline recovery 
 
 ---
 Questions or issues? Start by checking `flask.log`, the `uploads/` directory for missing assets, and the smoke tests for regression clues.
+# Deploy trigger
