@@ -398,16 +398,27 @@ class HookImageGenerator:
     def _extract_polling_url(self, payload: Dict[str, Any]) -> Optional[str]:
         if not isinstance(payload, dict):
             return None
+        # First check common top-level keys
         candidates = [
             payload.get("polling_url"),
             payload.get("pollingUrl"),
             payload.get("status_url"),
             payload.get("statusUrl"),
-            self._get_nested_value(payload, "urls.status"),
-            self._get_nested_value(payload, "urls.polling"),
+            payload.get("url"),
+            payload.get("sample"),
         ]
         for candidate in candidates:
-            if isinstance(candidate, str) and candidate.strip():
+            if isinstance(candidate, str) and candidate.strip() and candidate.startswith("http"):
+                return candidate.strip()
+        # Check nested structures
+        nested_candidates = [
+            self._get_nested_value(payload, "urls.status"),
+            self._get_nested_value(payload, "urls.polling"),
+            self._get_nested_value(payload, "result.sample"),
+            self._get_nested_value(payload, "result.url"),
+        ]
+        for candidate in nested_candidates:
+            if isinstance(candidate, str) and candidate.strip() and candidate.startswith("http"):
                 return candidate.strip()
         return None
 
