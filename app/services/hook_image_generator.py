@@ -170,7 +170,7 @@ class HookImageGenerator:
     templates can surface the previews instantly.
     """
 
-    DEFAULT_BASE_URL = os.getenv("FLUX_API_BASE_URL", "https://api.us2.bfl.ai/v1")
+    DEFAULT_BASE_URL = os.getenv("FLUX_API_BASE_URL", "https://api.bfl.ai/v1")
     DEFAULT_MODEL_ENDPOINT = os.getenv("FLUX_MODEL_ENDPOINT", "flux-2-pro")
     DEFAULT_POLL_INTERVAL = 0.5  # seconds
     DEFAULT_POLL_TIMEOUT = 90.0  # seconds
