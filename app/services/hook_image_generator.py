@@ -84,7 +84,7 @@ class HookImageGenerator:
     """
 
     DEFAULT_BASE_URL = os.getenv("FLUX_API_BASE_URL", "https://api.bfl.ai/v1")
-    DEFAULT_MODEL_ENDPOINT = os.getenv("FLUX_MODEL_ENDPOINT", "flux-2-pro")
+    DEFAULT_MODEL_ENDPOINT = os.getenv("FLUX_MODEL_ENDPOINT", "flux-2-klein")
     DEFAULT_POLL_INTERVAL = 0.5  # seconds
     DEFAULT_POLL_TIMEOUT = 90.0  # seconds
     DEFAULT_CREATE_TIMEOUT = 15.0  # seconds
