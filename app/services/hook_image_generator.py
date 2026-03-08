@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import threading
@@ -26,6 +27,92 @@ _QUEUE_SEMAPHORE = threading.BoundedSemaphore(value=_FLUX_QUEUE_LIMIT)
 _WEBHOOK_LOCK = threading.Lock()
 _WEBHOOK_RESULTS: Dict[str, Dict[str, Any]] = {}
 _WEBHOOK_EVENTS: Dict[str, threading.Event] = {}
+
+
+_TASK_ID_KEYS = {
+    "task_id",
+    "taskid",
+    "taskID",
+    "task-id",
+}
+_TASK_CONTAINER_KEYS = (
+    "task",
+    "data",
+    "payload",
+    "state",
+    "record",
+    "detail",
+    "event",
+    "resource",
+    "body",
+    "entry",
+    "message",
+)
+_TASK_HINT_KEYS = {
+    "status",
+    "state",
+    "result",
+    "results",
+    "output",
+    "outputs",
+    "image",
+    "images",
+    "urls",
+    "polling_url",
+    "pollingUrl",
+    "webhook_url",
+    "webhookUrl",
+    "created_at",
+    "updated_at",
+    "progress",
+    "kind",
+    "type",
+}
+
+
+def extract_flux_task_id(payload: Any) -> Optional[str]:
+    """Best-effort extraction of a FLUX task id from arbitrary webhook payloads."""
+
+    stack: List[Any] = [payload]
+    seen: set[int] = set()
+
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+
+        if isinstance(current, dict):
+            for key, value in current.items():
+                lowered = key.lower()
+                if lowered in _TASK_ID_KEYS or lowered.endswith("task_id"):
+                    if isinstance(value, (str, int)) and str(value).strip():
+                        return str(value)
+
+            raw_id = current.get("id")
+            if raw_id and isinstance(raw_id, (str, int)) and _looks_like_task_container(current):
+                return str(raw_id)
+
+            for container_key in _TASK_CONTAINER_KEYS:
+                nested = current.get(container_key)
+                if isinstance(nested, (dict, list)):
+                    stack.append(nested)
+
+            for value in current.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+
+        elif isinstance(current, list):
+            for item in current:
+                if isinstance(item, (dict, list)):
+                    stack.append(item)
+
+    return None
+
+
+def _looks_like_task_container(payload: Dict[str, Any]) -> bool:
+    return any(key in payload for key in _TASK_HINT_KEYS)
+
 
 
 def record_flux_webhook_payload(task_id: str, payload: Dict[str, Any]) -> None:
@@ -127,6 +214,8 @@ class HookImageGenerator:
             raise ValueError("FLUX_API_KEY (or BFL_API_KEY) is required for image generation")
 
         self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        self._base_url_candidates = self._derive_base_url_candidates(self.base_url)
+        self._has_alternate_base = len(self._base_url_candidates) > 1
         self.model_endpoint = (model_endpoint or self.DEFAULT_MODEL_ENDPOINT).lstrip("/")
         self.request_delay = max(request_delay, 0.12)
         self.poll_interval = max(0.1, poll_interval or self.DEFAULT_POLL_INTERVAL)
@@ -281,18 +370,7 @@ class HookImageGenerator:
             _QUEUE_SEMAPHORE.release()
 
     def _extract_task_id(self, payload: Dict[str, Any]) -> Optional[str]:
-        if not isinstance(payload, dict):
-            return None
-        for key in ("id", "task_id", "taskId", "taskID"):
-            value = payload.get(key)
-            if value:
-                return str(value)
-        data_block = payload.get("data")
-        if isinstance(data_block, dict):
-            nested = self._extract_task_id(data_block)
-            if nested:
-                return nested
-        return None
+        return extract_flux_task_id(payload)
 
     def _extract_polling_url(self, payload: Dict[str, Any]) -> Optional[str]:
         if not isinstance(payload, dict):
@@ -384,6 +462,7 @@ class HookImageGenerator:
 
             task_id = self._extract_task_id(response_payload)
             polling_url = self._extract_polling_url(response_payload)
+            LOGGER.info("FLUX create response pending task_id=%s polling_url=%s webhook_enabled=%s", task_id, polling_url, bool(self.webhook_url))
             if not task_id and not polling_url:
                 raise ExternalAPIError(
                     "FLUX",
@@ -393,11 +472,13 @@ class HookImageGenerator:
 
             if self.webhook_url and task_id:
                 try:
+                    LOGGER.info("FLUX awaiting webhook for task %s (timeout %.1fs)", task_id, self.poll_timeout)
                     payload_from_webhook = self._await_webhook_result(task_id, timeout=self.poll_timeout)
                 except ExternalAPIError:
                     LOGGER.warning("FLUX webhook timed out for task %s, falling back to polling", task_id)
                     payload_from_webhook = None
                 if payload_from_webhook:
+                    self._log_flux_payload("webhook_payload", payload_from_webhook)
                     image_payload = self._extract_image_payload(payload_from_webhook)
                     if image_payload.has_data:
                         return image_payload
@@ -422,23 +503,51 @@ class HookImageGenerator:
 
     @api_retry(label="flux_image_request", exceptions=(requests.exceptions.RequestException, ExternalAPIError))
     def _perform_flux_request(self, *, endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        url = f"{self.base_url}/{endpoint}"
         headers = self._build_headers()
-        response = self.session.post(url, headers=headers, json=payload, timeout=self.create_timeout)
-        if response.status_code >= 400:
-            self._apply_rate_limit_backoff(response)
-            raise self._build_flux_error(response)
-        return self._safe_json(response)
+        candidates = self._candidate_urls(endpoint)
+        last_error: Optional[BaseException] = None
+        for idx, url in enumerate(candidates, start=1):
+            has_more = idx < len(candidates)
+            try:
+                response = self.session.post(url, headers=headers, json=payload, timeout=self.create_timeout)
+                if response.status_code >= 400:
+                    self._apply_rate_limit_backoff(response)
+                    raise self._build_flux_error(response)
+                payload_json = self._safe_json(response)
+                self._log_flux_payload(f"create_response attempt={idx}", payload_json)
+                if idx > 1:
+                    LOGGER.info("FLUX create request succeeded via fallback endpoint %s", url)
+                return payload_json
+            except requests.exceptions.RequestException as exc:
+                last_error = exc
+                if not self._should_try_alternate_base(has_more=has_more, error=exc):
+                    raise
+                LOGGER.warning("FLUX create request attempt %s failed via %s: %s. Trying alternate endpoint...", idx, url, exc)
+            except ExternalAPIError as exc:
+                last_error = exc
+                if not self._should_try_alternate_base(has_more=has_more, error=exc, status_code=exc.status_code):
+                    raise
+                LOGGER.warning("FLUX create request attempt %s returned HTTP %s via %s. Trying alternate endpoint...", idx, exc.status_code, url)
+        if last_error:
+            raise last_error
+        raise ExternalAPIError("FLUX", "Unable to reach FLUX endpoint")
 
     def _poll_flux_task(self, polling_target: str, *, task_id: Optional[str], timeout: float, interval: float) -> Dict[str, Any]:
         deadline = time.time() + timeout
+        display_target = polling_target if polling_target.startswith("http") else f"{self.base_url}/{polling_target.lstrip('/')}"
+        LOGGER.info("FLUX poll start task=%s target=%s timeout=%.1fs interval=%.1fs", task_id or "unknown", display_target, timeout, interval)
+        last_status: Optional[str] = None
         while time.time() < deadline:
             try:
                 payload = self._perform_flux_get(polling_target)
-            except NonRetryableAPIError:
+            except NonRetryableAPIError as exc:
+                LOGGER.warning("FLUX poll task %s received non-retryable response: %s", task_id or polling_target, exc)
                 time.sleep(interval)
                 continue
             status = self._normalized_status(payload.get("status"))
+            if status != last_status:
+                LOGGER.info("FLUX poll task %s status=%s progress=%s", task_id or polling_target, status or "<unknown>", payload.get("progress"))
+                last_status = status
             if status in {"ready", "completed", "success", "succeeded"}:
                 return payload
             if status in {"pending", "processing", "running"}:
@@ -449,22 +558,47 @@ class HookImageGenerator:
             if status in {"error", "failed"}:
                 raise ExternalAPIError("FLUX", "FLUX job failed", payload=payload)
             time.sleep(interval)
-        raise ExternalAPIError("FLUX", "Timed out waiting for FLUX job to finish", payload={"task_id": task_id, "polling_url": polling_target})
+        LOGGER.error("FLUX poll timeout task=%s last_status=%s target=%s", task_id or polling_target, last_status, display_target)
+        raise ExternalAPIError("FLUX", "Timed out waiting for FLUX job to finish", payload={"task_id": task_id, "polling_url": polling_target, "last_status": last_status})
 
     @api_retry(label="flux_image_status", exceptions=(requests.exceptions.RequestException, ExternalAPIError))
     def _perform_flux_get(self, endpoint_or_url: str) -> Dict[str, Any]:
-        if endpoint_or_url.startswith("http://") or endpoint_or_url.startswith("https://"):
-            url = endpoint_or_url
-        else:
-            url = f"{self.base_url}/{endpoint_or_url.lstrip('/')}"
         headers = self._build_headers()
-        response = self.session.get(url, headers=headers, timeout=max(30.0, self.poll_interval * 4))
-        if response.status_code >= 400:
-            if response.status_code == 404:
-                raise NonRetryableAPIError("FLUX", "Task not found", status_code=404)
-            self._apply_rate_limit_backoff(response)
-            raise self._build_flux_error(response)
-        return self._safe_json(response)
+        if endpoint_or_url.startswith("http://") or endpoint_or_url.startswith("https://"):
+            targets = [endpoint_or_url]
+        else:
+            targets = self._candidate_urls(endpoint_or_url)
+        last_error: Optional[BaseException] = None
+        for idx, url in enumerate(targets, start=1):
+            has_more = idx < len(targets)
+            try:
+                response = self.session.get(url, headers=headers, timeout=max(30.0, self.poll_interval * 4))
+                if response.status_code >= 400:
+                    error: ExternalAPIError
+                    if response.status_code == 404:
+                        error = NonRetryableAPIError("FLUX", "Task not found", status_code=404)
+                    else:
+                        error = self._build_flux_error(response)
+                        self._apply_rate_limit_backoff(response)
+                    raise error
+                payload = self._safe_json(response)
+                self._log_flux_payload(f"status_response attempt={idx}", payload)
+                if idx > 1:
+                    LOGGER.info("FLUX status request succeeded via fallback endpoint %s", url)
+                return payload
+            except requests.exceptions.RequestException as exc:
+                last_error = exc
+                if not self._should_try_alternate_base(has_more=has_more, error=exc):
+                    raise
+                LOGGER.warning("FLUX status request attempt %s failed via %s: %s. Trying alternate endpoint...", idx, url, exc)
+            except ExternalAPIError as exc:
+                last_error = exc
+                if not self._should_try_alternate_base(has_more=has_more, error=exc, status_code=exc.status_code):
+                    raise
+                LOGGER.warning("FLUX status request attempt %s returned HTTP %s via %s. Trying alternate endpoint...", idx, exc.status_code, url)
+        if last_error:
+            raise last_error
+        raise ExternalAPIError("FLUX", "Unable to fetch FLUX status")
 
     def _build_headers(self) -> Dict[str, str]:
         return {
@@ -571,6 +705,74 @@ class HookImageGenerator:
         if env_path:
             return os.path.abspath(env_path)
         return os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "uploads"))
+
+    def _derive_base_url_candidates(self, primary: str) -> List[str]:
+        candidates: List[str] = [primary.rstrip("/")]
+        legacy_override = os.getenv("FLUX_LEGACY_BASE_URL")
+        if legacy_override:
+            legacy = legacy_override.rstrip("/")
+            if legacy and legacy not in candidates:
+                candidates.append(legacy)
+        elif "api.bfl.ai" in primary:
+            legacy = primary.replace("api.bfl.ai", "api.bfl.ml").rstrip("/")
+            if legacy and legacy not in candidates:
+                candidates.append(legacy)
+        return candidates
+
+    def _candidate_urls(self, endpoint: str) -> List[str]:
+        suffix = endpoint.lstrip("/")
+        return [f"{base}/{suffix}" for base in self._base_url_candidates]
+
+    def _should_try_alternate_base(
+        self,
+        *,
+        has_more: bool,
+        error: Optional[BaseException] = None,
+        status_code: Optional[int] = None,
+    ) -> bool:
+        if not has_more or not self._has_alternate_base:
+            return False
+        if isinstance(error, requests.exceptions.RequestException):
+            return True
+        if isinstance(error, ExternalAPIError):
+            return status_code in {404, 421, 426, 308}
+        return False
+
+    def _sanitize_flux_payload(self, payload: Any, *, depth: int = 0) -> Any:
+        if depth > 4:
+            return "<max-depth>"
+        redact_keys = {"b64_json", "image_base64", "prompt", "raw"}
+        if isinstance(payload, dict):
+            sanitized: Dict[str, Any] = {}
+            for key, value in payload.items():
+                if key in redact_keys:
+                    sanitized[key] = "<redacted>"
+                    continue
+                sanitized[key] = self._sanitize_flux_payload(value, depth=depth + 1)
+            return sanitized
+        if isinstance(payload, list):
+            return [self._sanitize_flux_payload(item, depth=depth + 1) for item in payload[:5]]
+        if isinstance(payload, str) and len(payload) > 500:
+            return f"{payload[:500]}...<truncated>"
+        return payload
+
+    def _format_flux_payload_for_log(self, payload: Any) -> str:
+        sanitized = self._sanitize_flux_payload(payload)
+        try:
+            serialized = json.dumps(sanitized, ensure_ascii=False)
+        except Exception:
+            serialized = str(sanitized)
+        if len(serialized) > 2000:
+            serialized = f"{serialized[:2000]}...<truncated>"
+        return serialized
+
+    def _log_flux_payload(self, label: str, payload: Any) -> None:
+        try:
+            message = self._format_flux_payload_for_log(payload)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            message = f"<failed to serialize payload: {exc}>"
+        LOGGER.info("FLUX %s: %s", label, message)
+
 
     def _safe_json(self, response: requests.Response) -> Dict[str, Any]:
         try:

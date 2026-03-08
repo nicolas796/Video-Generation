@@ -26,7 +26,7 @@ from app.services.video_assembly import VideoAssembler
 from app.services.smart_assembly import SmartVideoAssembler
 from app.services.pipeline_progress import PipelineProgressTracker, PipelineRecoveryService, build_hook_script_payload
 from app.services.hook_generator import HOOK_TEMPLATES, build_hook_product_payload
-from app.services.hook_image_generator import HookImageGenerator, record_flux_webhook_payload
+from app.services.hook_image_generator import HookImageGenerator, record_flux_webhook_payload, extract_flux_task_id
 
 from app.tasks.hook_tasks import queue_hook_generation, run_hook_generation_blocking
 from app.tasks import thread_runner
@@ -3826,14 +3826,11 @@ def download_final_video(use_case_id):
 def flux_webhook():
     """Receive FLUX completion callbacks (used when webhook_url is provided)."""
     payload = request.get_json(silent=True) or {}
-    task_id = (
-        payload.get('task_id')
-        or payload.get('taskId')
-        or payload.get('id')
-        or _extract_nested_value(payload, 'data.task_id')
-        or _extract_nested_value(payload, 'data.id')
-        or _extract_nested_value(payload, 'state.task_id')
-    )
+    task_id = extract_flux_task_id(payload)
+    if not task_id:
+        task_id = request.args.get('task_id') or request.args.get('taskId')
+    if not task_id:
+        task_id = request.headers.get('X-Flux-Task-Id') or request.headers.get('x-flux-task-id')
     if not task_id:
         current_app.logger.warning('FLUX webhook missing task id: %s', payload)
         return jsonify({'error': 'task_id missing'}), 400
