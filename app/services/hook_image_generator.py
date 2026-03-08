@@ -170,8 +170,8 @@ class HookImageGenerator:
     templates can surface the previews instantly.
     """
 
-    DEFAULT_BASE_URL = os.getenv("FLUX_API_BASE_URL", "https://api.bfl.ai/v1")
-    DEFAULT_MODEL_ENDPOINT = os.getenv("FLUX_MODEL_ENDPOINT", "flux-2-klein-4b")
+    DEFAULT_BASE_URL = os.getenv("FLUX_API_BASE_URL", "https://api.us2.bfl.ai/v1")
+    DEFAULT_MODEL_ENDPOINT = os.getenv("FLUX_MODEL_ENDPOINT", "flux-2-pro")
     DEFAULT_POLL_INTERVAL = 0.5  # seconds
     DEFAULT_POLL_TIMEOUT = 90.0  # seconds
     DEFAULT_CREATE_TIMEOUT = 15.0  # seconds
@@ -270,9 +270,11 @@ class HookImageGenerator:
                     'message': f"{step_message}..."
                 })
 
-            prompt = self._build_image_prompt(product_data, variant, index)
+            prompt_payload = self._build_image_prompt(product_data, variant, index)
+            prompt = prompt_payload.get('prompt') or ''
+            input_image = prompt_payload.get('input_image')
             try:
-                image_payload = self._generate_with_flux(prompt)
+                image_payload = self._generate_with_flux(prompt, input_image=input_image)
                 filename = f"hook_variant_{index + 1}.png"
                 saved_path = self._save_image_payload(image_payload, upload_folder, filename)
                 relative_path = self._to_relative_path(saved_path)
@@ -307,7 +309,7 @@ class HookImageGenerator:
         return image_paths
 
     # ------------------------------------------------------------------
-    def _build_image_prompt(self, product_data: Dict[str, Any], variant: Dict[str, Any], index: int) -> str:
+    def _build_image_prompt(self, product_data: Dict[str, Any], variant: Dict[str, Any], index: int) -> Dict[str, Any]:
         product_name = product_data.get("name") or product_data.get("brand") or "this product"
         description = (product_data.get("description") or "").strip()
         specs = product_data.get("specifications") or {}
@@ -333,7 +335,28 @@ class HookImageGenerator:
             details.append(f"Visual focus: {visual}.")
 
         details.append("Shot on cinema camera, ultra realistic textures, 1024x1024, trending on Behance, high dynamic range, zero text artifacts.")
-        return " ".join(details)
+        prompt_text = " ".join(details)
+        return {
+            "prompt": prompt_text,
+            "input_image": self._select_input_image(product_data),
+        }
+
+    def _select_input_image(self, product_data: Dict[str, Any]) -> Optional[str]:
+        images = product_data.get("images") or []
+        if not isinstance(images, (list, tuple)):
+            return None
+        for candidate in images:
+            url = None
+            if isinstance(candidate, dict):
+                url = candidate.get("url") or candidate.get("src")
+            elif isinstance(candidate, str):
+                url = candidate
+            if not url:
+                continue
+            url = str(url).strip()
+            if url and url.startswith(("http://", "https://")):
+                return url
+        return None
 
     def _style_for_hook(self, hook_label: str) -> str:
         hook_label = hook_label.lower()
@@ -441,7 +464,7 @@ class HookImageGenerator:
         time.sleep(delay)
 
     # ------------------------------------------------------------------
-    def _generate_with_flux(self, prompt: str) -> FluxImagePayload:
+    def _generate_with_flux(self, prompt: str, *, input_image: Optional[str] = None) -> FluxImagePayload:
         payload = {
             "prompt": prompt,
             "width": 1024,
@@ -449,7 +472,12 @@ class HookImageGenerator:
             "num_images": 1,
             "guidance_scale": 3.5,
             "steps": 28,
+            "safety_tolerance": 3,
+            "output_format": "png",
+            "prompt_upsampling": True,
         }
+        if input_image:
+            payload["input_image"] = input_image
         if self.webhook_url and "webhook_url" not in payload:
             payload["webhook_url"] = self.webhook_url
 
@@ -539,7 +567,7 @@ class HookImageGenerator:
         last_status: Optional[str] = None
         while time.time() < deadline:
             try:
-                payload = self._perform_flux_get(polling_target)
+                payload = self._perform_flux_get(polling_target, task_id=task_id)
             except NonRetryableAPIError as exc:
                 LOGGER.warning("FLUX poll task %s received non-retryable response: %s", task_id or polling_target, exc)
                 time.sleep(interval)
@@ -562,7 +590,7 @@ class HookImageGenerator:
         raise ExternalAPIError("FLUX", "Timed out waiting for FLUX job to finish", payload={"task_id": task_id, "polling_url": polling_target, "last_status": last_status})
 
     @api_retry(label="flux_image_status", exceptions=(requests.exceptions.RequestException, ExternalAPIError))
-    def _perform_flux_get(self, endpoint_or_url: str) -> Dict[str, Any]:
+    def _perform_flux_get(self, endpoint_or_url: str, *, task_id: Optional[str] = None) -> Dict[str, Any]:
         headers = self._build_headers()
         if endpoint_or_url.startswith("http://") or endpoint_or_url.startswith("https://"):
             targets = [endpoint_or_url]
@@ -572,7 +600,8 @@ class HookImageGenerator:
         for idx, url in enumerate(targets, start=1):
             has_more = idx < len(targets)
             try:
-                response = self.session.get(url, headers=headers, timeout=max(30.0, self.poll_interval * 4))
+                params = {"id": task_id} if task_id else None
+                response = self.session.get(url, headers=headers, params=params, timeout=max(30.0, self.poll_interval * 4))
                 if response.status_code >= 400:
                     error: ExternalAPIError
                     if response.status_code == 404:
