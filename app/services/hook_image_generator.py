@@ -679,6 +679,9 @@ class HookImageGenerator:
             for key in ("result", "output", "image", "images"):
                 value = payload.get(key)
                 if isinstance(value, dict):
+                    # FLUX uses 'sample' for the image URL
+                    if value.get("sample") and str(value.get("sample")).startswith("http"):
+                        return FluxImagePayload(url=value["sample"])
                     if value.get("url"):
                         return FluxImagePayload(url=value["url"])
                     if value.get("b64_json"):
