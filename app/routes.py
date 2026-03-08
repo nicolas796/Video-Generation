@@ -26,7 +26,7 @@ from app.services.video_assembly import VideoAssembler
 from app.services.smart_assembly import SmartVideoAssembler
 from app.services.pipeline_progress import PipelineProgressTracker, PipelineRecoveryService, build_hook_script_payload
 from app.services.hook_generator import HOOK_TEMPLATES, build_hook_product_payload
-from app.services.hook_image_generator import HookImageGenerator
+from app.services.hook_image_generator import HookImageGenerator, record_flux_webhook_payload
 
 from app.tasks.hook_tasks import queue_hook_generation, run_hook_generation_blocking
 from app.tasks import thread_runner
@@ -377,7 +377,10 @@ def _execute_hook_preview_generation(flask_app, hook_id: int, ctx: Optional[thre
 
         hook_folder = _ensure_clean_hook_folder(hook_id)
         product_payload = build_hook_product_payload(product, use_case)
-        generator = HookImageGenerator(api_key=current_app.config.get('FLUX_API_KEY'))
+        generator = HookImageGenerator(
+            api_key=current_app.config.get('FLUX_API_KEY'),
+            webhook_url=current_app.config.get('FLUX_WEBHOOK_URL'),
+        )
 
         def _progress_callback(stage: str, event: str, payload: Optional[Dict[str, Any]] = None):
             try:
@@ -3817,6 +3820,27 @@ def download_final_video(use_case_id):
 
     directory, filename = os.path.split(full_path)
     return send_from_directory(directory, filename, as_attachment=True, download_name=filename)
+
+
+@main_bp.route('/webhooks/flux', methods=['POST'])
+def flux_webhook():
+    """Receive FLUX completion callbacks (used when webhook_url is provided)."""
+    payload = request.get_json(silent=True) or {}
+    task_id = (
+        payload.get('task_id')
+        or payload.get('taskId')
+        or payload.get('id')
+        or _extract_nested_value(payload, 'data.task_id')
+        or _extract_nested_value(payload, 'data.id')
+        or _extract_nested_value(payload, 'state.task_id')
+    )
+    if not task_id:
+        current_app.logger.warning('FLUX webhook missing task id: %s', payload)
+        return jsonify({'error': 'task_id missing'}), 400
+
+    record_flux_webhook_payload(str(task_id), payload)
+    current_app.logger.info('FLUX webhook stored payload for task %s with status %s', task_id, payload.get('status'))
+    return jsonify({'success': True})
 
 
 @main_bp.route('/webhooks/pollo', methods=['POST'])

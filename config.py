@@ -138,6 +138,8 @@ class Config:
     # ElevenLabs default voice
     DEFAULT_VOICE_ID = os.getenv('DEFAULT_VOICE_ID', 'XB0fDUnXU5powFXDhCwa')
 
+    FLUX_WEBHOOK_URL = os.getenv('FLUX_WEBHOOK_URL', '')
+
 class DevelopmentConfig(Config):
     """Development configuration."""
     FLASK_ENV = 'development'
