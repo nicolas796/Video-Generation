@@ -658,9 +658,12 @@ class HookImageGenerator:
     def _extract_image_payload(self, payload: Dict[str, Any]) -> FluxImagePayload:
         # Direct URL responses
         if isinstance(payload, dict):
+            # FLUX-specific direct response (sample field)
+            if payload.get("sample") and str(payload.get("sample")).startswith("http"):
+                return FluxImagePayload(url=payload["sample"])
             if payload.get("image_url"):
                 return FluxImagePayload(url=payload["image_url"])
-            if payload.get("url") and payload.get("url").startswith("http"):
+            if payload.get("url") and str(payload.get("url")).startswith("http"):
                 return FluxImagePayload(url=payload["url"])
 
             # OpenAI-style data array
